@@ -2,6 +2,7 @@
   "expo": {
     "name": "menba",
     "slug": "menba",
+    "scheme": "menba",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -13,9 +14,11 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      "bundleIdentifier": "com.menba.app",
       "supportsTablet": true
     },
     "android": {
+      "package": "com.menba.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -25,6 +28,19 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c02c9255-8658-403b-b4d7-b1bfd612b1ca"
+      }
     }
   }
 }
