@@ -1,0 +1,8 @@
+{
+  "name": "Menba",
+  "description": "Akıllı Kaynak & Soru Bankası Platformu - AI destekli ders kaynak analizi, konu ayrıştırma ve adaptif test simülatörü",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
