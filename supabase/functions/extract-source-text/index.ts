@@ -115,8 +115,24 @@ serve(async (req) => {
         const text = result?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 
         if (!text) {
+            // Olculdu: ayni PDF ilk denemede bos donup 422 aliyor, ikinci
+            // denemede 63.000 karakter cikariyor. Sebebi gorebilmek icin
+            // finishReason yanitla birlikte donuyor.
+            const finishReason = result?.candidates?.[0]?.finishReason ?? null;
+            const blockReason = result?.promptFeedback?.blockReason ?? null;
+
+            console.error('extract-source-text: model metin dondurmedi', {
+                finishReason,
+                blockReason,
+                model: geminiResult.model,
+                fileName: fileName ?? 'unknown',
+            });
+
             return new Response(
-                JSON.stringify({ error: 'Dosyadan metin cikarilamadi.' }),
+                JSON.stringify({
+                    error: 'Dosyadan metin cikarilamadi. Lutfen tekrar deneyin.',
+                    diagnostic: { reason: 'empty-model-response', finishReason, blockReason },
+                }),
                 {
                     status: 422,
                     headers: { 'Content-Type': 'application/json' },

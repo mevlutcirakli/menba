@@ -1,20 +1,15 @@
 import { useState } from 'react';
-import { Redirect } from 'expo-router';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useAuth } from '../src/hooks/useAuth';
 import { supabase } from '../src/services/supabase';
-import { colors, radius, spacing, typography } from '../src/theme/tokens';
+import { palette, radius, spacing, typography } from '../src/theme/tokens';
 
+// Oturum acildiginda buradan cikisi _layout.tsx'teki Stack.Protected yapar;
+// bu ekranda ayrica Redirect kullanmak cift yonlendirmeye yol acar.
 export default function SignInScreen() {
-    const { session, isLoading } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
-
-    if (!isLoading && session) {
-        return <Redirect href="/(tabs)" />;
-    }
 
     const signIn = async () => {
         setError(null);
@@ -90,53 +85,53 @@ const styles = StyleSheet.create({
         padding: spacing.lg,
         gap: 12,
         justifyContent: 'center',
-        backgroundColor: colors.surface,
+        backgroundColor: palette.cardBg,
     },
     title: {
         fontSize: 28,
         fontWeight: '700',
-        color: colors.textPrimary,
+        color: palette.textPrimary,
     },
     description: {
         ...typography.body,
-        color: colors.textSecondary,
+        color: palette.textSecondary,
         marginBottom: 8,
     },
     input: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
         paddingHorizontal: 12,
         paddingVertical: 10,
         fontSize: 15,
-        color: colors.textPrimary,
-        backgroundColor: colors.surface,
+        color: palette.textPrimary,
+        backgroundColor: palette.cardBg,
     },
     error: {
-        color: colors.error,
+        color: palette.error,
         fontSize: 14,
     },
     primaryButton: {
         marginTop: 6,
         borderRadius: radius.md,
-        backgroundColor: colors.primary,
+        backgroundColor: palette.indigo600,
         paddingVertical: 12,
         alignItems: 'center',
     },
     primaryButtonText: {
-        color: colors.surface,
+        color: palette.cardBg,
         fontSize: 15,
         fontWeight: '700',
     },
     secondaryButton: {
         borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: colors.primary,
+        borderColor: palette.indigo600,
         paddingVertical: 12,
         alignItems: 'center',
     },
     secondaryButtonText: {
-        color: colors.primary,
+        color: palette.indigo600,
         fontSize: 15,
         fontWeight: '700',
     },

@@ -1,41 +1,45 @@
-import { Link } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSources } from '../../src/hooks/useSources';
-import { useEffect, useState } from 'react';
-import { supabase } from '../../src/services/supabase';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import {
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
+} from 'react-native';
 import { AnimatedCard } from '../../src/components/AnimatedCard';
+import { AppHeader } from '../../src/components/AppHeader';
 import { SkeletonCard } from '../../src/components/SkeletonCard';
-import { colors, radius, spacing, typography } from '../../src/theme/tokens';
-
-function getSourceModeLabel(value: string): string {
-    if (value === 'hybrid') {
-        return 'Hibrit (Topic + Soru)';
-    }
-
-    if (value === 'questions-only') {
-        return 'Sadece Soru Bankasi';
-    }
-
-    if (value === 'topics-only') {
-        return 'Sadece Topic';
-    }
-
-    if (value === 'yds') {
-        return 'YDS';
-    }
-
-    if (value === 'custom') {
-        return 'Ozel';
-    }
-
-    return value;
-}
+import { useSources } from '../../src/hooks/useSources';
+import { supabase } from '../../src/services/supabase';
+import { gradients, palette, radius, spacing, uiType } from '../../src/theme/tokens';
 
 export default function QuizTabScreen() {
+    const router = useRouter();
     const { sources, isLoading, error, fetchSources } = useSources();
+    const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
     const [sourceStatsById, setSourceStatsById] = useState<
         Record<string, { topicCount: number; questionCount: number }>
     >({});
+
+    useFocusEffect(
+        useCallback(() => {
+            void fetchSources();
+        }, [fetchSources])
+    );
+
+    // Liste degisince secili kaynak artik yoksa secimi birak.
+    useEffect(() => {
+        if (
+            selectedSourceId &&
+            !sources.some((source) => source.id === selectedSourceId)
+        ) {
+            setSelectedSourceId(null);
+        }
+    }, [sources, selectedSourceId]);
 
     useEffect(() => {
         if (sources.length === 0) {
@@ -44,6 +48,7 @@ export default function QuizTabScreen() {
         }
 
         let cancelled = false;
+
         const loadSourceStats = async () => {
             const sourceIds = sources.map((source) => source.id);
             const { data: topicRows, error: topicError } = await supabase
@@ -90,7 +95,10 @@ export default function QuizTabScreen() {
                 return;
             }
 
-            const nextStats: Record<string, { topicCount: number; questionCount: number }> = {};
+            const nextStats: Record<
+                string,
+                { topicCount: number; questionCount: number }
+            > = {};
             for (const source of sources) {
                 nextStats[source.id] = {
                     topicCount: topicCountBySource.get(source.id) ?? 0,
@@ -109,202 +117,235 @@ export default function QuizTabScreen() {
     }, [sources]);
 
     return (
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-            <View style={styles.heroCard}>
-                <View style={styles.heroTopRow}>
-                    <View style={styles.heroIconWrap}>
-                        <Text style={styles.heroIconText}>Q</Text>
-                    </View>
-                    <Text style={styles.heroBadge}>Quiz Merkezi</Text>
-                </View>
-                <Text style={styles.title}>Hazir Soru Akisina Basla</Text>
-                <Text style={styles.description}>
-                    Kaynak sec, tek tikla quiz akisini baslat. Once kayitli soru bankasi kullanilir,
-                    gerekirse AI yeni soru uretir.
-                </Text>
-            </View>
+        <View style={styles.screen}>
+            <AppHeader />
 
-            <Pressable
-                style={({ pressed }) => [styles.refreshButton, pressed ? styles.refreshButtonPressed : null]}
-                onPress={() => void fetchSources()}
+            <ScrollView
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isLoading}
+                        onRefresh={() => void fetchSources()}
+                        tintColor={palette.indigo600}
+                        colors={[palette.indigo600]}
+                    />
+                }
             >
-                <Text style={styles.refreshGlyph}>R</Text>
-                <Text style={styles.refreshButtonText}>Listeyi Yenile</Text>
-            </Pressable>
-
-            {isLoading ? <SkeletonCard height={84} /> : null}
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            {!isLoading && sources.length === 0 ? (
-                <View style={styles.card}>
-                    <Text style={styles.emptyTitle}>Quiz icin kaynak bulunamadi ✨</Text>
-                    <Text style={styles.emptyDescription}>
-                        Ilk kaynagini ekleyerek basla, sonra buradan akisi baslatabilirsin.
-                    </Text>
-                    <Link href="/(tabs)" style={styles.linkButton}>
-                        Kaynaklara Git
-                    </Link>
-                </View>
-            ) : null}
-
-            {sources.map((source, index) => (
-                <AnimatedCard
-                    key={source.id}
-                    style={styles.card}
-                    delayMs={Math.min(120, index * 30)}
-                    resetKey={source.id}
+                <LinearGradient
+                    colors={gradients.hero}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.hero}
                 >
-                    <Text style={styles.cardTitle}>{source.title}</Text>
-                    <View style={styles.metaRow}>
-                        <Text style={styles.modeChip}>{getSourceModeLabel(source.source_type)}</Text>
-                        <Text style={styles.metricChip}>
-                            {sourceStatsById[source.id]?.topicCount ?? 0} Konu
-                        </Text>
-                        <Text style={styles.metricChip}>
-                            {sourceStatsById[source.id]?.questionCount ?? 0} Soru
-                        </Text>
-                    </View>
-                    <Link href={`/quiz/${source.id}`} style={styles.linkButton}>
-                        Quizi Baslat
-                    </Link>
-                </AnimatedCard>
-            ))}
-        </ScrollView>
+                    <Text style={styles.heroEyebrow}>PRATİK & SINAV SİMÜLATÖRÜ</Text>
+                    <Text style={styles.heroTitle}>Özelleştirilmiş Test Başlat</Text>
+                    <Text style={styles.heroDescription}>
+                        Test etmek istediğin kaynağı seç. Sonraki adımda konu başlıklarını
+                        belirleyip adaptif pratik moduna başlayabilirsin.
+                    </Text>
+                </LinearGradient>
+
+                {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+                <View style={styles.panel}>
+                    <Text style={styles.sectionLabel}>1. TEST EDİLECEK KAYNAK</Text>
+
+                    {isLoading ? <SkeletonCard height={80} /> : null}
+
+                    {!isLoading && sources.length === 0 ? (
+                        <View style={styles.emptyBox}>
+                            <Ionicons
+                                name="albums-outline"
+                                size={24}
+                                color={palette.textMuted}
+                            />
+                            <Text style={styles.emptyTitle}>
+                                Test çözülecek kaynak bulunamadı
+                            </Text>
+                            <Text style={styles.emptyHint}>
+                                Önce &apos;Ekle&apos; sekmesinden bir kaynak yükle.
+                            </Text>
+                        </View>
+                    ) : null}
+
+                    {sources.map((source, index) => {
+                        const stats = sourceStatsById[source.id];
+                        const isSelected = selectedSourceId === source.id;
+
+                        return (
+                            <AnimatedCard
+                                key={source.id}
+                                delayMs={Math.min(120, index * 30)}
+                                resetKey={source.id}
+                            >
+                                <Pressable
+                                    style={[
+                                        styles.sourceOption,
+                                        isSelected ? styles.sourceOptionSelected : null,
+                                    ]}
+                                    onPress={() => setSelectedSourceId(source.id)}
+                                >
+                                    <View style={styles.sourceOptionText}>
+                                        <Text
+                                            style={styles.sourceOptionTitle}
+                                            numberOfLines={2}
+                                        >
+                                            {source.title}
+                                        </Text>
+                                        <Text style={styles.sourceOptionMeta}>
+                                            {stats?.topicCount ?? 0} Konu •{' '}
+                                            {stats?.questionCount ?? 0} Soru
+                                        </Text>
+                                    </View>
+
+                                    {isSelected ? (
+                                        <Ionicons
+                                            name="checkmark-circle"
+                                            size={22}
+                                            color={palette.indigo600}
+                                        />
+                                    ) : null}
+                                </Pressable>
+                            </AnimatedCard>
+                        );
+                    })}
+
+                    {sources.length > 0 ? (
+                        <Pressable
+                            style={({ pressed }) => [
+                                styles.startButton,
+                                pressed ? styles.pressed : null,
+                                !selectedSourceId ? styles.startButtonDisabled : null,
+                            ]}
+                            disabled={!selectedSourceId}
+                            onPress={() => {
+                                if (selectedSourceId) {
+                                    router.push(`/quiz/${selectedSourceId}`);
+                                }
+                            }}
+                        >
+                            <Ionicons name="play" size={15} color={palette.onDarkPrimary} />
+                            <Text style={styles.startButtonText}>Testi Şimdi Başlat</Text>
+                        </Pressable>
+                    ) : null}
+                </View>
+            </ScrollView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    screen: {
         flex: 1,
+        backgroundColor: palette.pageBg,
+    },
+    container: {
         padding: spacing.lg,
         gap: spacing.md,
-        backgroundColor: colors.background,
+        paddingBottom: spacing.xl,
     },
-    heroCard: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.xl,
-        padding: 16,
-        gap: spacing.sm,
-        backgroundColor: colors.surface,
-    },
-    heroTopRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    heroIconWrap: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.primarySurface,
-    },
-    heroIconText: {
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    heroBadge: {
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    title: {
-        ...typography.title,
-        color: colors.textPrimary,
-    },
-    description: {
-        fontSize: 16,
-        color: colors.textSecondary,
-        lineHeight: 24,
-    },
-    refreshButton: {
-        backgroundColor: colors.surface,
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.md,
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        alignSelf: 'flex-start',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    refreshButtonText: {
-        color: colors.textPrimary,
-        fontWeight: '700',
-        fontSize: 14,
-    },
-    refreshButtonPressed: {
-        backgroundColor: colors.primarySurface,
-    },
-    refreshGlyph: {
-        color: colors.textMuted,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    card: {
-        borderWidth: 1,
-        borderColor: colors.border,
+    hero: {
         borderRadius: radius.lg,
+        padding: spacing.lg,
+        gap: spacing.sm,
+    },
+    heroEyebrow: {
+        color: palette.indigo300,
+        fontSize: 11,
+        fontWeight: '800',
+        letterSpacing: 0.9,
+    },
+    heroTitle: {
+        color: palette.onDarkPrimary,
+        fontSize: 24,
+        fontWeight: '800',
+    },
+    heroDescription: {
+        color: palette.onDarkMuted,
+        fontSize: 14,
+        lineHeight: 21,
+    },
+    panel: {
+        backgroundColor: palette.cardBg,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
         padding: spacing.md,
         gap: spacing.sm,
-        backgroundColor: colors.surface,
     },
-    cardTitle: {
-        ...typography.heading,
-        color: colors.textPrimary,
+    sectionLabel: {
+        ...uiType.statLabel,
+        color: palette.textSecondary,
+        marginBottom: spacing.xs,
     },
-    metaRow: {
+    sourceOption: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.cardBg,
     },
-    modeChip: {
-        borderRadius: radius.pill,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        overflow: 'hidden',
+    sourceOptionSelected: {
+        borderColor: palette.indigo500,
+        backgroundColor: palette.indigoSurface,
     },
-    metricChip: {
-        borderRadius: radius.pill,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 12,
+    sourceOptionText: {
+        flex: 1,
+    },
+    sourceOptionTitle: {
+        fontSize: 14,
         fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        overflow: 'hidden',
+        color: palette.textPrimary,
+    },
+    sourceOptionMeta: {
+        ...uiType.small,
+        color: palette.textMuted,
+        marginTop: 3,
+    },
+    startButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: spacing.sm,
+        marginTop: spacing.sm,
+        paddingVertical: 13,
+        borderRadius: radius.pill,
+        backgroundColor: palette.indigo600,
+    },
+    startButtonDisabled: {
+        backgroundColor: palette.indigo500,
+        opacity: 0.45,
+    },
+    startButtonText: {
+        color: palette.onDarkPrimary,
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    emptyBox: {
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingVertical: spacing.xl,
     },
     emptyTitle: {
-        ...typography.heading,
-        color: colors.textPrimary,
-    },
-    emptyDescription: {
-        fontSize: 14,
-        color: colors.textMuted,
-        lineHeight: 22,
-    },
-    linkButton: {
-        marginTop: 4,
-        alignSelf: 'flex-start',
-        backgroundColor: colors.primary,
-        color: colors.surface,
-        borderRadius: radius.md,
-        overflow: 'hidden',
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '700',
+        color: palette.textSecondary,
+    },
+    emptyHint: {
+        ...uiType.body,
+        color: palette.textMuted,
+        textAlign: 'center',
+    },
+    pressed: {
+        opacity: 0.8,
     },
     errorText: {
-        color: colors.error,
+        color: palette.error,
         fontSize: 14,
     },
 });

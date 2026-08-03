@@ -106,6 +106,60 @@ function extractJsonPayloadText(rawText: string): string {
     return withoutFence;
 }
 
+/**
+ * Yarim kalmis JSON'dan tam olan soru nesnelerini kurtarir.
+ *
+ * Olculdu: uzun sikkli bolumlerde (orn. diyalog tamamlama) model cikti sinirina
+ * takilip JSON'u ortasinda kesiyor. Once tek bir JSON.parse deneniyordu ve
+ * basarisiz olunca parcanin TAMAMI kayboluyordu; 80 soruluk bir YDS
+ * kitapciginda bu, bir bolumun tamamen dusmesi demekti.
+ */
+function salvageQuestionObjects(payloadText: string): unknown[] {
+    const salvaged: unknown[] = [];
+    const openIndexes: number[] = [];
+    let inString = false;
+    let escaped = false;
+
+    for (let index = 0; index < payloadText.length; index += 1) {
+        const char = payloadText[index];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === '"') {
+            inString = true;
+        } else if (char === '{') {
+            openIndexes.push(index);
+        } else if (char === '}') {
+            const start = openIndexes.pop();
+            if (start === undefined) {
+                continue;
+            }
+
+            const candidateText = payloadText.slice(start, index + 1);
+            if (!candidateText.includes('"questionText"')) {
+                continue;
+            }
+
+            try {
+                salvaged.push(JSON.parse(candidateText));
+            } catch {
+                // Bu nesne de bozuksa atla; digerleri kurtarilabilir.
+            }
+        }
+    }
+
+    return salvaged;
+}
+
 function parseQuestionCandidates(rawText: string): unknown[] {
     const payloadText = extractJsonPayloadText(rawText);
 
@@ -119,10 +173,10 @@ function parseQuestionCandidates(rawText: string): unknown[] {
             return parsed.questions;
         }
     } catch {
-        return [];
+        return salvageQuestionObjects(payloadText);
     }
 
-    return [];
+    return salvageQuestionObjects(payloadText);
 }
 
 function stripOptionPrefix(text: string): string {
@@ -229,7 +283,20 @@ function matchAllowedTopicName(topicName: unknown, allowedMap: Map<string, strin
     return null;
 }
 
-function normalizeQuestions(rawQuestions: unknown, allowedTopicNames: string[]): ExtractedQuestion[] {
+interface RejectionCounts {
+    notObject: number;
+    topicNotAllowed: number;
+    missingQuestionText: number;
+    tooFewOptions: number;
+    unresolvedAnswer: number;
+    duplicate: number;
+}
+
+function normalizeQuestions(
+    rawQuestions: unknown,
+    allowedTopicNames: string[],
+    rejections: RejectionCounts
+): ExtractedQuestion[] {
     const questionCandidates = Array.isArray(rawQuestions) ? rawQuestions : [];
 
     const allowedMap = new Map(
@@ -241,6 +308,7 @@ function normalizeQuestions(rawQuestions: unknown, allowedTopicNames: string[]):
 
     for (const item of questionCandidates) {
         if (!item || typeof item !== 'object') {
+            rejections.notObject += 1;
             continue;
         }
 
@@ -255,7 +323,12 @@ function normalizeQuestions(rawQuestions: unknown, allowedTopicNames: string[]):
         };
 
         const matchedTopicName = matchAllowedTopicName(maybe.topicName, allowedMap);
-        if (!matchedTopicName || typeof maybe.questionText !== 'string') {
+        if (!matchedTopicName) {
+            rejections.topicNotAllowed += 1;
+            continue;
+        }
+        if (typeof maybe.questionText !== 'string') {
+            rejections.missingQuestionText += 1;
             continue;
         }
 
@@ -268,11 +341,13 @@ function normalizeQuestions(rawQuestions: unknown, allowedTopicNames: string[]):
         const inlineExtract = extractInlineOptions(maybe.questionText);
         const mergedOptions = buildLabeledOptions([...rawArrayOptions, ...inlineExtract.options]);
         if (mergedOptions.length < 4) {
+            rejections.tooFewOptions += 1;
             continue;
         }
 
         const correctAnswer = resolveCorrectChoice(maybe.correctAnswer, mergedOptions);
         if (!correctAnswer) {
+            rejections.unresolvedAnswer += 1;
             continue;
         }
 
@@ -282,6 +357,7 @@ function normalizeQuestions(rawQuestions: unknown, allowedTopicNames: string[]):
 
         const dedupeKey = `${normalizedTopicKey}|${normalizedQuestionText.toLocaleLowerCase('tr-TR')}`;
         if (dedupe.has(dedupeKey)) {
+            rejections.duplicate += 1;
             continue;
         }
 
@@ -340,10 +416,16 @@ serve(async (req) => {
         const safeQuestionCount = Math.min(30, Math.max(1, Number(maxQuestionsPerTopic) || 3));
         const clippedContent = contentText.slice(0, MAX_CONTENT_LENGTH);
 
+        // ONEMLI: Sayi HEDEF degil TAVAN. Olculdu: "hedef soru sayisi" ifadesiyle
+        // model kotayi doldurmak icin metinde olmayan sorular uyduruyordu
+        // (gercek bir YDS PDF'inin ilk parcasindan donen 79 sorunun 39'u
+        // kaynakta yoktu). Metinde ne kadar soru varsa o kadar donmeli.
         const prompt =
-            'Asagidaki metinden, verilen konular icin coktan secmeli soru seti cikar. ' +
-            'Metin bir soru bankasiysa, mevcut sorulari oldugu gibi cikar ve yeni soru uretme. ' +
-            'Metinde soru yoksa bos liste dondur. ' +
+            'Asagidaki metinde GERCEKTEN VAR OLAN coktan secmeli sorulari oldugu gibi cikar. ' +
+            'ASLA yeni soru uretme, tamamlama yapma, ornek soru yazma. ' +
+            'Her sorunun kokunu ve sikklarini metinde yazdigi haliyle kopyala. ' +
+            'Metinde kac soru varsa o kadar dondur; verilen sayi bir UST SINIRDIR, ulasilmasi gereken bir hedef degildir. ' +
+            'Metinde hic soru yoksa bos liste dondur. ' +
             'Yalnizca JSON dondur. Format birebir su olsun: ' +
             '{"questions":[{"topicName":"...","questionText":"...","options":["A) ...","B) ...","C) ...","D) ..."],"correctAnswer":"A","explanation":"...","difficulty":3}]}. ' +
             'Dogru cevap harf olarak A/B/C/D/E olmali. ' +
@@ -357,12 +439,19 @@ serve(async (req) => {
                             text:
                                 `${prompt}\n\n` +
                                 `Konu listesi: ${cleanedTopicNames.join(', ')}\n` +
-                                `Her konu icin hedef soru sayisi: ${safeQuestionCount}\n\n` +
+                                `Konu basina EN FAZLA soru sayisi (ust sinir): ${safeQuestionCount}\n\n` +
                                 `Metin:\n${clippedContent}`,
                         },
                     ],
                 },
             ],
+            // JSON modu ciktinin ayristirilabilir olmasini garantiler; yuksek
+            // token siniri da uzun sikkli bolumlerde kesilmeyi azaltir.
+            generationConfig: {
+                responseMimeType: 'application/json',
+                maxOutputTokens: 32768,
+                temperature: 0.2,
+            },
         });
 
         if ('error' in geminiResult) {
@@ -375,14 +464,71 @@ serve(async (req) => {
         const result = await geminiResult.response.json();
         const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
 
+        // Gemini bazen HTTP 200 donup hic metin vermiyor (RECITATION, SAFETY,
+        // MAX_TOKENS...). Eskiden bu sessizce `questions: []` olarak donuyordu,
+        // yani cagiran taraf "bu parcada soru yokmus" saniyordu. Sebebi artik
+        // yanitla birlikte geliyor ki tekrar denenebilsin ve loglanabilsin.
         if (!rawText || typeof rawText !== 'string') {
-            return new Response(JSON.stringify({ questions: [] }), {
-                headers: { 'Content-Type': 'application/json' },
+            const finishReason = result?.candidates?.[0]?.finishReason ?? null;
+            const blockReason = result?.promptFeedback?.blockReason ?? null;
+
+            console.error('extract-questions: model metin dondurmedi', {
+                finishReason,
+                blockReason,
+                contentLength: clippedContent.length,
+                topicCount: cleanedTopicNames.length,
             });
+
+            return new Response(
+                JSON.stringify({
+                    questions: [],
+                    diagnostic: {
+                        reason: 'empty-model-response',
+                        finishReason,
+                        blockReason,
+                    },
+                }),
+                { headers: { 'Content-Type': 'application/json' } }
+            );
         }
 
         const questionCandidates = parseQuestionCandidates(rawText);
-        const parsedQuestions = normalizeQuestions(questionCandidates, cleanedTopicNames);
+        const rejections: RejectionCounts = {
+            notObject: 0,
+            topicNotAllowed: 0,
+            missingQuestionText: 0,
+            tooFewOptions: 0,
+            unresolvedAnswer: 0,
+            duplicate: 0,
+        };
+        const parsedQuestions = normalizeQuestions(questionCandidates, cleanedTopicNames, rejections);
+
+        // Model soru dondurdugu halde hepsi elendiyse sebebi gorunur olmali;
+        // "bu parcada soru yokmus" ile "hepsini biz attik" ayni sey degil.
+        if (parsedQuestions.length === 0) {
+            console.error('extract-questions: hicbir soru gecerli sayilmadi', {
+                rawTextLength: rawText.length,
+                candidateCount: questionCandidates.length,
+                rejections,
+                allowedTopics: cleanedTopicNames,
+            });
+
+            return new Response(
+                JSON.stringify({
+                    questions: [],
+                    diagnostic: {
+                        reason:
+                            questionCandidates.length === 0
+                                ? 'model-output-not-parseable'
+                                : 'all-candidates-rejected',
+                        rawTextLength: rawText.length,
+                        candidateCount: questionCandidates.length,
+                        rejections,
+                    },
+                }),
+                { headers: { 'Content-Type': 'application/json' } }
+            );
+        }
 
         return new Response(JSON.stringify({ questions: parsedQuestions }), {
             headers: { 'Content-Type': 'application/json' },

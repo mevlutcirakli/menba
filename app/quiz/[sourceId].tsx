@@ -12,7 +12,7 @@ import { AnimatedCard } from '../../src/components/AnimatedCard';
 import { SkeletonCard } from '../../src/components/SkeletonCard';
 import { useQuiz } from '../../src/hooks/useQuiz';
 import { supabase } from '../../src/services/supabase';
-import { colors, radius, spacing, typography } from '../../src/theme/tokens';
+import { palette, radius, spacing, typography } from '../../src/theme/tokens';
 
 interface QuizUiSessionState {
     selectedTopicId: string | null;
@@ -349,30 +349,30 @@ const styles = StyleSheet.create({
     container: {
         padding: spacing.lg,
         gap: 12,
-        backgroundColor: colors.surface,
+        backgroundColor: palette.cardBg,
     },
     title: {
         fontSize: 24,
         fontWeight: '700',
-        color: colors.textPrimary,
+        color: palette.textPrimary,
     },
     stickyHeader: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
         paddingHorizontal: 14,
         paddingVertical: 12,
         gap: 3,
-        backgroundColor: colors.primarySurface,
+        backgroundColor: palette.indigoSurface,
     },
     stickyHeaderTitle: {
         fontSize: 14,
         fontWeight: '700',
-        color: colors.textPrimary,
+        color: palette.textPrimary,
     },
     stickyHeaderMeta: {
         fontSize: 12,
-        color: colors.primary,
+        color: palette.indigo600,
     },
     headerChipRow: {
         marginTop: 4,
@@ -390,31 +390,31 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
     },
     headerChipQueue: {
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
+        borderColor: palette.indigo500,
+        backgroundColor: palette.indigoSurface,
+        color: palette.indigo600,
     },
     headerChipBank: {
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
+        borderColor: palette.indigo500,
+        backgroundColor: palette.indigoSurface,
+        color: palette.indigo600,
     },
     description: {
         fontSize: 16,
-        color: colors.textSecondary,
+        color: palette.textSecondary,
         lineHeight: 24,
     },
     card: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
         padding: spacing.md,
         gap: 10,
-        backgroundColor: colors.surface,
+        backgroundColor: palette.cardBg,
     },
     sectionTitle: {
         ...typography.heading,
-        color: colors.textPrimary,
+        color: palette.textPrimary,
     },
     topicList: {
         flexDirection: 'row',
@@ -423,38 +423,38 @@ const styles = StyleSheet.create({
     },
     topicPill: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.pill,
         paddingVertical: 6,
         paddingHorizontal: 10,
     },
     topicPillActive: {
-        borderColor: colors.primary,
-        backgroundColor: colors.primarySurface,
+        borderColor: palette.indigo600,
+        backgroundColor: palette.indigoSurface,
     },
     topicPillText: {
         fontSize: 13,
-        color: colors.textSecondary,
+        color: palette.textSecondary,
     },
     topicPillTextActive: {
-        color: colors.primary,
+        color: palette.indigo600,
         fontWeight: '700',
     },
     input: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
         paddingHorizontal: 12,
         paddingVertical: 10,
         fontSize: 15,
-        color: colors.textPrimary,
-        backgroundColor: colors.surface,
+        color: palette.textPrimary,
+        backgroundColor: palette.cardBg,
     },
     flowInfoCard: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
-        backgroundColor: colors.primarySurface,
+        backgroundColor: palette.indigoSurface,
         paddingHorizontal: 10,
         paddingVertical: 10,
         gap: 4,
@@ -462,18 +462,18 @@ const styles = StyleSheet.create({
     flowInfoTitle: {
         fontSize: 13,
         fontWeight: '700',
-        color: colors.primary,
+        color: palette.indigo600,
     },
     flowInfoLine: {
         fontSize: 12,
         lineHeight: 18,
-        color: colors.textSecondary,
+        color: palette.textSecondary,
     },
     apiInfoCard: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
-        backgroundColor: colors.primarySurface,
+        backgroundColor: palette.indigoSurface,
         paddingHorizontal: 10,
         paddingVertical: 10,
         gap: 4,
@@ -481,15 +481,15 @@ const styles = StyleSheet.create({
     apiInfoTitle: {
         fontSize: 13,
         fontWeight: '700',
-        color: colors.primary,
+        color: palette.indigo600,
     },
     apiInfoLine: {
         fontSize: 12,
         lineHeight: 18,
-        color: colors.textSecondary,
+        color: palette.textSecondary,
     },
     button: {
-        backgroundColor: colors.primary,
+        backgroundColor: palette.indigo600,
         borderRadius: radius.md,
         paddingVertical: 12,
         alignItems: 'center',
@@ -498,35 +498,35 @@ const styles = StyleSheet.create({
         opacity: 0.7,
     },
     buttonText: {
-        color: colors.surface,
+        color: palette.cardBg,
         fontSize: 15,
         fontWeight: '700',
     },
     secondaryButton: {
         borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: colors.primary,
+        borderColor: palette.indigo600,
         paddingVertical: 10,
         alignItems: 'center',
         marginTop: 4,
     },
     secondaryButtonText: {
-        color: colors.primary,
+        color: palette.indigo600,
         fontSize: 14,
         fontWeight: '700',
     },
     error: {
-        color: colors.error,
+        color: palette.error,
         fontSize: 14,
     },
     errorTitle: {
-        color: colors.error,
+        color: palette.error,
         fontSize: 16,
         fontWeight: '700',
     },
     errorCard: {
-        borderColor: colors.error,
-        backgroundColor: colors.errorSurface,
+        borderColor: palette.error,
+        backgroundColor: '#fef2f2',
     },
     stateCard: {
         alignItems: 'center',
@@ -536,8 +536,8 @@ const styles = StyleSheet.create({
     stateLinkButton: {
         marginTop: 4,
         alignSelf: 'flex-start',
-        backgroundColor: colors.primary,
-        color: colors.surface,
+        backgroundColor: palette.indigo600,
+        color: palette.cardBg,
         borderRadius: radius.md,
         overflow: 'hidden',
         paddingVertical: 10,
@@ -547,25 +547,25 @@ const styles = StyleSheet.create({
     },
     recommendedText: {
         fontSize: 14,
-        color: colors.primary,
+        color: palette.indigo600,
         fontWeight: '600',
     },
     flowNoticeText: {
         fontSize: 13,
-        color: colors.textPrimary,
-        backgroundColor: colors.primarySurface,
+        color: palette.textPrimary,
+        backgroundColor: palette.indigoSurface,
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.sm,
         paddingHorizontal: 10,
         paddingVertical: 8,
     },
     prefetchInfo: {
         fontSize: 12,
-        color: colors.textMuted,
+        color: palette.textMuted,
     },
     emptyStateHint: {
         fontSize: 13,
-        color: colors.textSecondary,
+        color: palette.textSecondary,
     },
 });

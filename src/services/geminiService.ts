@@ -33,6 +33,51 @@ export interface ExtractedQuestionItem {
     difficulty: number;
 }
 
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const MAX_INVOKE_ATTEMPTS = 3;
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Edge Function cagrilarini gecici hatalarda tekrar dener.
+ *
+ * Gerekcesi olcumlu: ayni istek arka arkaya bazen 502 doner (gateway/soguk
+ * baslangic). Tekrar denemeyince extract-topics bos donuyor, kaynak tek
+ * varsayilan konuyla kaydediliyor ve soru sayisi konu basina tavana takiliyor.
+ */
+async function invokeWithRetry<T>(
+    functionName: string,
+    body: object,
+    extraRetryableStatusCodes: number[] = []
+): Promise<{ data: T | null; error: { message: string } | null }> {
+    let lastError: { message: string } | null = null;
+
+    for (let attempt = 1; attempt <= MAX_INVOKE_ATTEMPTS; attempt += 1) {
+        const { data, error } = await supabase.functions.invoke(functionName, { body });
+
+        if (!error) {
+            return { data: data as T, error: null };
+        }
+
+        const status = (error as { context?: Response }).context?.status;
+        lastError = error;
+
+        const isRetryable =
+            status === undefined ||
+            RETRYABLE_STATUS_CODES.has(status) ||
+            extraRetryableStatusCodes.includes(status);
+        if (!isRetryable || attempt === MAX_INVOKE_ATTEMPTS) {
+            break;
+        }
+
+        await sleep(600 * attempt);
+    }
+
+    return { data: null, error: lastError };
+}
+
 async function readEdgeFunctionErrorMessage(context?: Response): Promise<string | null> {
     if (!context) {
         return null;
@@ -63,9 +108,7 @@ async function readEdgeFunctionErrorMessage(context?: Response): Promise<string 
 export async function generateQuestion(
     params: GenerateQuestionParams
 ): Promise<GeneratedQuestion> {
-    const { data, error } = await supabase.functions.invoke('generate-question', {
-        body: params,
-    });
+    const { data, error } = await invokeWithRetry<any>('generate-question', params);
 
     if (error) {
         throw new Error(`Soru uretilemedi: ${error.message}`);
@@ -87,8 +130,10 @@ export async function explainWrongAnswer(
     userAnswer: string,
     correctAnswer: string
 ): Promise<string> {
-    const { data, error } = await supabase.functions.invoke('explain-answer', {
-        body: { question, userAnswer, correctAnswer },
+    const { data, error } = await invokeWithRetry<any>('explain-answer', {
+        question,
+        userAnswer,
+        correctAnswer,
     });
 
     if (error) {
@@ -101,9 +146,9 @@ export async function explainWrongAnswer(
 export async function extractSourceTextFromFile(
     params: ExtractSourceTextParams
 ): Promise<string> {
-    const { data, error } = await supabase.functions.invoke('extract-source-text', {
-        body: params,
-    });
+    // 422 = model bos yanit dondurdu. Olculdu: ayni PDF ilk denemede 422,
+    // ikinci denemede basariyla cikiyor. Bu yuzden 422 de tekrar denenir.
+    const { data, error } = await invokeWithRetry<any>('extract-source-text', params, [422]);
 
     if (error) {
         const detailedMessage = await readEdgeFunctionErrorMessage(
@@ -122,9 +167,7 @@ export async function extractSourceTextFromFile(
 export async function extractTopicsFromSource(
     params: ExtractTopicsParams
 ): Promise<string[]> {
-    const { data, error } = await supabase.functions.invoke('extract-topics', {
-        body: params,
-    });
+    const { data, error } = await invokeWithRetry<any>('extract-topics', params);
 
     if (error) {
         const detailedMessage = await readEdgeFunctionErrorMessage(
@@ -148,9 +191,7 @@ export async function extractTopicsFromSource(
 export async function extractQuestionsFromSource(
     params: ExtractQuestionsParams
 ): Promise<ExtractedQuestionItem[]> {
-    const { data, error } = await supabase.functions.invoke('extract-questions', {
-        body: params,
-    });
+    const { data, error } = await invokeWithRetry<any>('extract-questions', params);
 
     if (error) {
         const detailedMessage = await readEdgeFunctionErrorMessage(

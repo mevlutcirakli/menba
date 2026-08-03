@@ -1,39 +1,46 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { Link, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     Pressable,
+    RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
     TextInput,
     View,
 } from 'react-native';
+import { AnimatedCard } from '../../src/components/AnimatedCard';
+import { AppHeader } from '../../src/components/AppHeader';
+import { SkeletonCard } from '../../src/components/SkeletonCard';
 import { useSources } from '../../src/hooks/useSources';
 import { supabase } from '../../src/services/supabase';
-import { AnimatedCard } from '../../src/components/AnimatedCard';
-import { SkeletonCard } from '../../src/components/SkeletonCard';
-import { colors, radius, spacing, typography } from '../../src/theme/tokens';
+import { palette, radius, spacing, uiType } from '../../src/theme/tokens';
+
+const COLLAPSED_TOPIC_COUNT = 3;
+
+interface SourceStats {
+    topicCount: number;
+    questionCount: number;
+    topicQuestionBreakdown: Array<{ topicName: string; questionCount: number }>;
+}
 
 function getSourceModeLabel(value: string): string {
-    if (value === 'hybrid' || value === 'questions-only' || value === 'topics-only') {
-        if (value === 'hybrid') {
-            return 'Hibrit (Topic + Soru)';
-        }
-
-        if (value === 'questions-only') {
-            return 'Sadece Soru Bankasi';
-        }
-
-        return 'Sadece Topic';
+    if (value === 'hybrid') {
+        return 'Hibrit';
     }
-
+    if (value === 'questions-only') {
+        return 'Soru Bankası';
+    }
+    if (value === 'topics-only') {
+        return 'Topic';
+    }
     if (value === 'yds') {
         return 'YDS';
     }
-
     if (value === 'custom') {
-        return 'Ozel';
+        return 'Özel';
     }
 
     return value;
@@ -46,27 +53,43 @@ export default function SourcesListScreen() {
     const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
     const [actionInfo, setActionInfo] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
-    const [sourceStatsById, setSourceStatsById] = useState<
-        Record<
-            string,
-            {
-                topicCount: number;
-                questionCount: number;
-                topicQuestionBreakdown: Array<{ topicName: string; questionCount: number }>;
-            }
-        >
-    >({});
+    const [sourceStatsById, setSourceStatsById] = useState<Record<string, SourceStats>>({});
+    const [expandedTopicSourceIds, setExpandedTopicSourceIds] = useState<string[]>([]);
+
+    const toggleTopicList = (targetSourceId: string) => {
+        setExpandedTopicSourceIds((previous) =>
+            previous.includes(targetSourceId)
+                ? previous.filter((id) => id !== targetSourceId)
+                : [...previous, targetSourceId]
+        );
+    };
 
     const normalizedSearchText = searchText.trim().toLocaleLowerCase('tr-TR');
-    const filteredSources = sources.filter((source) => {
-        if (!normalizedSearchText) {
-            return true;
-        }
+    const filteredSources = useMemo(
+        () =>
+            sources.filter((source) => {
+                if (!normalizedSearchText) {
+                    return true;
+                }
 
-        const title = source.title.toLocaleLowerCase('tr-TR');
-        const modeLabel = getSourceModeLabel(source.source_type).toLocaleLowerCase('tr-TR');
-        return title.includes(normalizedSearchText) || modeLabel.includes(normalizedSearchText);
-    });
+                const title = source.title.toLocaleLowerCase('tr-TR');
+                const modeLabel = getSourceModeLabel(source.source_type).toLocaleLowerCase(
+                    'tr-TR'
+                );
+                return (
+                    title.includes(normalizedSearchText) ||
+                    modeLabel.includes(normalizedSearchText)
+                );
+            }),
+        [sources, normalizedSearchText]
+    );
+
+    // Sekmeye her donuste liste tazelensin.
+    useFocusEffect(
+        useCallback(() => {
+            void fetchSources();
+        }, [fetchSources])
+    );
 
     useEffect(() => {
         if (sources.length === 0) {
@@ -75,6 +98,7 @@ export default function SourcesListScreen() {
         }
 
         let cancelled = false;
+
         const loadSourceStats = async () => {
             setIsLoadingSourceStats(true);
 
@@ -141,14 +165,7 @@ export default function SourcesListScreen() {
                 return;
             }
 
-            const nextStats: Record<
-                string,
-                {
-                    topicCount: number;
-                    questionCount: number;
-                    topicQuestionBreakdown: Array<{ topicName: string; questionCount: number }>;
-                }
-            > = {};
+            const nextStats: Record<string, SourceStats> = {};
             for (const source of sources) {
                 const topicQuestionBreakdown = topicRows
                     .filter((topic) => topic.source_id === source.id)
@@ -183,13 +200,10 @@ export default function SourcesListScreen() {
         questionCount: number
     ) => {
         Alert.alert(
-            'Kaynagi Sil',
-            `"${sourceTitle}" silinecek.\n\nBu islem geri alinamaz.\nSilinecek veri: ${topicCount} konu, ${questionCount} soru ve bu sorulara ait log kayitlari.`,
+            'Kaynağı Sil',
+            `"${sourceTitle}" silinecek.\n\nBu işlem geri alınamaz.\nSilinecek veri: ${topicCount} konu, ${questionCount} soru ve bu sorulara ait log kayıtları.`,
             [
-                {
-                    text: 'Vazgec',
-                    style: 'cancel',
-                },
+                { text: 'Vazgeç', style: 'cancel' },
                 {
                     text: 'Sil',
                     style: 'destructive',
@@ -201,12 +215,12 @@ export default function SourcesListScreen() {
 
                             try {
                                 await deleteSource(sourceId);
-                                setActionInfo('Kaynak basariyla silindi.');
+                                setActionInfo('Kaynak başarıyla silindi.');
                             } catch (deleteError) {
                                 setActionError(
                                     deleteError instanceof Error
                                         ? deleteError.message
-                                        : 'Kaynak silinirken hata olustu.'
+                                        : 'Kaynak silinirken hata oluştu.'
                                 );
                             } finally {
                                 setDeletingSourceId(null);
@@ -219,388 +233,481 @@ export default function SourcesListScreen() {
     };
 
     return (
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-            <View style={styles.heroCard}>
-                <View style={styles.heroTopRow}>
-                    <View style={styles.heroIconWrap}>
-                        <Text style={styles.heroIconText}>K</Text>
-                    </View>
-                    <Text style={styles.heroBadge}>Kaynak Arsivi</Text>
-                </View>
-                <Text style={styles.title}>Kaynaklarini Duzenle</Text>
-                <Text style={styles.description}>
-                    Tum kaynaklarin topic ve soru ozetleriyle burada. Hata eklenen kaynagi bu
-                    listeden silebilirsin.
-                </Text>
-            </View>
+        <View style={styles.screen}>
+            <AppHeader />
 
-            <AnimatedCard style={styles.card} delayMs={20} resetKey="sources-list-card">
-                <Text style={styles.sectionTitle}>Kaynak Listesi</Text>
-                <View style={styles.hintCard}>
-                    <Text style={styles.hintTitle}>Silme Notu</Text>
-                    <Text style={styles.hintText}>
-                        Bir kaynak silindiginde bagli konu, soru ve gecmis loglar kalici olarak temizlenir.
+            <ScrollView
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isLoading}
+                        onRefresh={() => void fetchSources()}
+                        tintColor={palette.indigo600}
+                        colors={[palette.indigo600]}
+                    />
+                }
+            >
+                <View style={styles.pageHead}>
+                    <Text style={styles.pageTitle}>Kaynak Kütüphanesi</Text>
+                    <Text style={styles.pageSubtitle}>
+                        İşlenmiş içeriklerin, konu dağılımları ve üretilen soru bankaları
                     </Text>
                 </View>
-                <TextInput
-                    value={searchText}
-                    onChangeText={setSearchText}
-                    placeholder="Kaynak ara (ad veya mod)"
-                    style={styles.searchInput}
-                />
-                <Text style={styles.filterMetaText}>
-                    Gosterilen: {filteredSources.length} / {sources.length}
-                </Text>
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.secondaryButton,
-                        pressed ? styles.secondaryButtonPressed : null,
-                        isLoading ? styles.buttonDisabled : null,
-                    ]}
-                    onPress={() => void fetchSources()}
-                    disabled={isLoading}
-                >
-                    <Text style={styles.secondaryGlyph}>R</Text>
-                    <Text style={styles.secondaryButtonText}>Kaynak Listesini Yenile</Text>
-                </Pressable>
-                {isLoading ? <SkeletonCard height={96} /> : null}
-                {isLoadingSourceStats ? (
-                    <Text style={styles.sourceMeta}>Konu ve soru ozetleri yukleniyor...</Text>
-                ) : null}
+
+                <View style={styles.searchWrap}>
+                    <Ionicons name="search" size={17} color={palette.textMuted} />
+                    <TextInput
+                        value={searchText}
+                        onChangeText={setSearchText}
+                        placeholder="Kaynaklarda ara..."
+                        placeholderTextColor={palette.textMuted}
+                        style={styles.searchInput}
+                    />
+                    {searchText.length > 0 ? (
+                        <Pressable onPress={() => setSearchText('')} hitSlop={8}>
+                            <Ionicons
+                                name="close-circle"
+                                size={17}
+                                color={palette.textMuted}
+                            />
+                        </Pressable>
+                    ) : null}
+                </View>
+
                 {error ? <Text style={styles.errorText}>{error}</Text> : null}
                 {actionInfo ? <Text style={styles.infoText}>{actionInfo}</Text> : null}
                 {actionError ? <Text style={styles.errorText}>{actionError}</Text> : null}
 
+                {isLoading ? <SkeletonCard height={120} /> : null}
+
                 {!isLoading && sources.length === 0 ? (
-                    <Text style={styles.emptyText}>Ilk kaynagini ekleyerek basla ✨</Text>
+                    <View style={styles.emptyCard}>
+                        <Ionicons
+                            name="documents-outline"
+                            size={26}
+                            color={palette.textMuted}
+                        />
+                        <Text style={styles.emptyText}>Henüz kaynak bulunmuyor</Text>
+                        <Text style={styles.emptyHint}>
+                            &apos;Ekle&apos; sekmesinden ilk kaynağını yükleyerek başla.
+                        </Text>
+                    </View>
                 ) : null}
 
                 {!isLoading && sources.length > 0 && filteredSources.length === 0 ? (
-                    <Text style={styles.emptyText}>Aramaya uyan kaynak bulunamadi.</Text>
+                    <View style={styles.emptyCard}>
+                        <Text style={styles.emptyText}>Aramaya uyan kaynak bulunamadı</Text>
+                    </View>
                 ) : null}
 
-                {filteredSources.map((source, index) => (
-                    <AnimatedCard
-                        key={source.id}
-                        style={styles.sourceRow}
-                        delayMs={Math.min(240, index * 40)}
-                        resetKey={source.id}
-                    >
-                        <View style={styles.sourceInfo}>
-                            <View style={styles.sourceTopRow}>
-                                <Text style={styles.sourceTitle}>{source.title}</Text>
-                                <Text style={styles.dateBadge}>
-                                    {source.created_at
-                                        ? new Date(source.created_at).toLocaleDateString('tr-TR')
-                                        : '-'}
-                                </Text>
-                            </View>
-                            <View style={styles.sourceMetaRow}>
-                                <Text style={styles.modeChip}>{getSourceModeLabel(source.source_type)}</Text>
-                                <Text style={styles.metricChip}>
-                                    {sourceStatsById[source.id]?.topicCount ?? 0} Konu
-                                </Text>
-                                <Text style={styles.metricChip}>
-                                    {sourceStatsById[source.id]?.questionCount ?? 0} Soru
-                                </Text>
-                            </View>
-                            {(sourceStatsById[source.id]?.topicQuestionBreakdown?.length ?? 0) > 0 ? (
-                                <View style={styles.breakdownBox}>
-                                    <Text style={styles.breakdownTitle}>Topik Dagilimi (ilk 3)</Text>
-                                    {sourceStatsById[source.id]?.topicQuestionBreakdown
-                                        .slice(0, 3)
-                                        .map((item) => (
-                                            <Text key={`${source.id}-${item.topicName}`} style={styles.sourceMeta}>
-                                                {item.topicName}: {item.questionCount} soru
+                {filteredSources.map((source, index) => {
+                    const stats = sourceStatsById[source.id];
+                    const isDeleting = deletingSourceId === source.id;
+
+                    return (
+                        <AnimatedCard
+                            key={source.id}
+                            style={styles.sourceCard}
+                            delayMs={Math.min(240, index * 40)}
+                            resetKey={source.id}
+                        >
+                            <View style={styles.cardTopRow}>
+                                <View style={styles.docIcon}>
+                                    <Ionicons
+                                        name="document-text-outline"
+                                        size={19}
+                                        color={palette.indigo600}
+                                    />
+                                </View>
+
+                                <View style={styles.cardTitleBlock}>
+                                    <View style={styles.badgeRow}>
+                                        <View style={styles.typeBadge}>
+                                            <Text style={styles.typeBadgeText}>
+                                                {getSourceModeLabel(
+                                                    source.source_type
+                                                ).toLocaleUpperCase('tr-TR')}
                                             </Text>
-                                        ))}
+                                        </View>
+                                        <Text style={styles.dateText}>
+                                            {source.created_at
+                                                ? new Date(source.created_at).toLocaleDateString(
+                                                      'tr-TR'
+                                                  )
+                                                : '—'}
+                                        </Text>
+                                    </View>
+                                    <Text style={styles.sourceTitle} numberOfLines={2}>
+                                        {source.title}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            {source.content_text ? (
+                                <Text style={styles.sourcePreview} numberOfLines={2}>
+                                    {source.content_text.trim()}
+                                </Text>
+                            ) : null}
+
+                            {(stats?.topicQuestionBreakdown?.length ?? 0) > 0 ? (
+                                <View style={styles.breakdownBox}>
+                                    {/* Onceden yalnizca ilk 3 konu gosteriliyordu;
+                                        8 konulu bir kaynakta gerisi gorunmuyordu. */}
+                                    {(expandedTopicSourceIds.includes(source.id)
+                                        ? stats?.topicQuestionBreakdown ?? []
+                                        : (stats?.topicQuestionBreakdown ?? []).slice(
+                                              0,
+                                              COLLAPSED_TOPIC_COUNT
+                                          )
+                                    ).map((item) => (
+                                        <View
+                                            key={`${source.id}-${item.topicName}`}
+                                            style={styles.breakdownRow}
+                                        >
+                                            <Text
+                                                style={styles.breakdownName}
+                                                numberOfLines={2}
+                                            >
+                                                {item.topicName}
+                                            </Text>
+                                            <Text style={styles.breakdownCount}>
+                                                {item.questionCount} soru
+                                            </Text>
+                                        </View>
+                                    ))}
+
+                                    {(stats?.topicQuestionBreakdown?.length ?? 0) >
+                                    COLLAPSED_TOPIC_COUNT ? (
+                                        <Pressable
+                                            onPress={() => toggleTopicList(source.id)}
+                                            style={({ pressed }) => [
+                                                styles.breakdownToggle,
+                                                pressed ? styles.pressed : null,
+                                            ]}
+                                            hitSlop={6}
+                                        >
+                                            <Text style={styles.breakdownToggleText}>
+                                                {expandedTopicSourceIds.includes(source.id)
+                                                    ? 'Konuları gizle'
+                                                    : `Tüm ${stats?.topicQuestionBreakdown.length} konuyu göster`}
+                                            </Text>
+                                            <Ionicons
+                                                name={
+                                                    expandedTopicSourceIds.includes(source.id)
+                                                        ? 'chevron-up'
+                                                        : 'chevron-down'
+                                                }
+                                                size={14}
+                                                color={palette.indigo600}
+                                            />
+                                        </Pressable>
+                                    ) : null}
                                 </View>
                             ) : null}
-                        </View>
-                        <View style={styles.sourceActions}>
-                            <Link href={`/quiz/${source.id}`} style={styles.actionPrimaryLink}>
-                                Teste Git
-                            </Link>
-                            <Link href="/(tabs)/quiz" style={styles.actionSecondaryLink}>
-                                Quiz Merkezi
-                            </Link>
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.actionDangerButton,
-                                    pressed ? styles.actionDangerPressed : null,
-                                    deletingSourceId === source.id ? styles.buttonDisabled : null,
-                                ]}
-                                onPress={() =>
-                                    handleDeleteSource(
-                                        source.id,
-                                        source.title,
-                                        sourceStatsById[source.id]?.topicCount ?? 0,
-                                        sourceStatsById[source.id]?.questionCount ?? 0
-                                    )
-                                }
-                                disabled={deletingSourceId === source.id}
-                            >
-                                <Text style={styles.actionDangerText}>
-                                    {deletingSourceId === source.id ? 'Siliniyor...' : 'Sil'}
-                                </Text>
-                            </Pressable>
-                        </View>
-                    </AnimatedCard>
-                ))}
-            </AnimatedCard>
-        </ScrollView>
+
+                            <View style={styles.divider} />
+
+                            <View style={styles.cardFooter}>
+                                <View style={styles.metricGroup}>
+                                    <View style={styles.metric}>
+                                        <Ionicons
+                                            name="layers-outline"
+                                            size={14}
+                                            color={palette.textMuted}
+                                        />
+                                        <Text style={styles.metricText}>
+                                            {stats?.topicCount ?? 0} Konu
+                                        </Text>
+                                    </View>
+                                    <View style={styles.metric}>
+                                        <Ionicons
+                                            name="help-circle-outline"
+                                            size={14}
+                                            color={palette.textMuted}
+                                        />
+                                        <Text style={styles.metricText}>
+                                            {stats?.questionCount ?? 0} Soru
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <View style={styles.footerActions}>
+                                    <Pressable
+                                        style={({ pressed }) => [
+                                            styles.deleteButton,
+                                            pressed ? styles.pressed : null,
+                                            isDeleting ? styles.disabled : null,
+                                        ]}
+                                        onPress={() =>
+                                            handleDeleteSource(
+                                                source.id,
+                                                source.title,
+                                                stats?.topicCount ?? 0,
+                                                stats?.questionCount ?? 0
+                                            )
+                                        }
+                                        disabled={isDeleting}
+                                        hitSlop={6}
+                                    >
+                                        <Ionicons
+                                            name="trash-outline"
+                                            size={16}
+                                            color={palette.error}
+                                        />
+                                    </Pressable>
+
+                                    <Link href={`/quiz/${source.id}`} asChild>
+                                        <Pressable
+                                            style={({ pressed }) => [
+                                                styles.primaryButton,
+                                                pressed ? styles.pressed : null,
+                                            ]}
+                                        >
+                                            <Ionicons
+                                                name="play"
+                                                size={13}
+                                                color={palette.onDarkPrimary}
+                                            />
+                                            <Text style={styles.primaryButtonText}>
+                                                Test Çöz
+                                            </Text>
+                                        </Pressable>
+                                    </Link>
+                                </View>
+                            </View>
+                        </AnimatedCard>
+                    );
+                })}
+
+                {isLoadingSourceStats ? (
+                    <Text style={styles.footnote}>Konu ve soru özetleri yükleniyor...</Text>
+                ) : null}
+            </ScrollView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+        backgroundColor: palette.pageBg,
+    },
     container: {
         padding: spacing.lg,
         gap: spacing.md,
-        backgroundColor: colors.background,
+        paddingBottom: spacing.xl,
     },
-    heroCard: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.xl,
-        padding: 16,
-        gap: spacing.sm,
-        backgroundColor: colors.surface,
+    pageHead: {
+        marginBottom: spacing.xs,
     },
-    heroTopRow: {
+    pageTitle: {
+        ...uiType.pageTitle,
+        color: palette.textPrimary,
+    },
+    pageSubtitle: {
+        ...uiType.body,
+        color: palette.textSecondary,
+        marginTop: spacing.xs,
+    },
+    searchWrap: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-    },
-    heroIconWrap: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.primarySurface,
-    },
-    heroIconText: {
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    heroBadge: {
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    title: {
-        ...typography.title,
-        color: colors.textPrimary,
-    },
-    description: {
-        fontSize: 16,
-        color: colors.textSecondary,
-        lineHeight: 24,
-    },
-    card: {
+        gap: spacing.sm,
+        paddingHorizontal: spacing.md,
+        borderRadius: radius.pill,
         borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.lg,
-        padding: spacing.md,
-        gap: 10,
-        backgroundColor: colors.surface,
-    },
-    sectionTitle: {
-        ...typography.heading,
-        color: colors.textPrimary,
-    },
-    hintCard: {
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: colors.border,
-        backgroundColor: colors.primarySurface,
-        paddingHorizontal: 10,
-        paddingVertical: 9,
-        gap: 4,
-    },
-    hintTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: colors.primary,
-    },
-    hintText: {
-        fontSize: 12,
-        lineHeight: 18,
-        color: colors.primary,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.cardBg,
     },
     searchInput: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.md,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 14,
-        color: colors.textPrimary,
-        backgroundColor: colors.surface,
-    },
-    filterMetaText: {
-        fontSize: 12,
-        color: colors.textMuted,
-    },
-    secondaryButton: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: colors.border,
-        paddingVertical: 10,
-        alignItems: 'center',
-        flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: colors.surface,
-    },
-    secondaryButtonText: {
-        color: colors.textPrimary,
-        fontSize: 14,
-        fontWeight: '700',
-    },
-    secondaryGlyph: {
-        color: colors.textMuted,
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    secondaryButtonPressed: {
-        backgroundColor: colors.primarySurface,
-    },
-    buttonDisabled: {
-        opacity: 0.6,
-    },
-    emptyText: {
-        color: colors.textMuted,
-        fontSize: 14,
-    },
-    sourceRow: {
-        flexDirection: 'column',
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 14,
-        padding: 10,
-        gap: 10,
-        backgroundColor: colors.surface,
-    },
-    sourceInfo: {
         flex: 1,
-        gap: 4,
+        paddingVertical: 11,
+        fontSize: 14,
+        color: palette.textPrimary,
     },
-    sourceTopRow: {
+    sourceCard: {
+        backgroundColor: palette.cardBg,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        padding: spacing.md,
+        gap: spacing.sm,
+    },
+    cardTopRow: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        gap: spacing.md,
+    },
+    docIcon: {
+        width: 38,
+        height: 38,
+        borderRadius: radius.md,
         alignItems: 'center',
-        gap: 8,
+        justifyContent: 'center',
+        backgroundColor: palette.indigoSurface,
+    },
+    cardTitleBlock: {
+        flex: 1,
+    },
+    badgeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+        marginBottom: spacing.xs,
+    },
+    typeBadge: {
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: radius.sm,
+        backgroundColor: palette.indigoSurface,
+    },
+    typeBadgeText: {
+        color: palette.indigo600,
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    dateText: {
+        ...uiType.small,
+        color: palette.textMuted,
     },
     sourceTitle: {
         fontSize: 15,
         fontWeight: '700',
-        color: colors.textPrimary,
-        flex: 1,
+        color: palette.textPrimary,
     },
-    dateBadge: {
-        borderRadius: 999,
-        backgroundColor: colors.primarySurface,
-        color: colors.textSecondary,
-        fontSize: 11,
-        fontWeight: '700',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        overflow: 'hidden',
+    sourcePreview: {
+        ...uiType.body,
+        color: palette.textSecondary,
     },
-    sourceMeta: {
-        fontSize: 13,
-        color: colors.textMuted,
-    },
-    sourceMetaRow: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    breakdownBox: {
-        marginTop: 4,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: colors.border,
-        backgroundColor: colors.primarySurface,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        gap: 4,
-    },
-    breakdownTitle: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: colors.textSecondary,
-    },
-    modeChip: {
-        borderRadius: radius.pill,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        overflow: 'hidden',
-    },
-    metricChip: {
-        borderRadius: radius.pill,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        overflow: 'hidden',
-    },
-    sourceActions: {
+    breakdownToggle: {
         flexDirection: 'row',
         alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 10,
+        justifyContent: 'center',
+        gap: 4,
+        paddingTop: 8,
     },
-    actionPrimaryLink: {
-        borderRadius: radius.sm,
-        backgroundColor: colors.primary,
-        color: colors.surface,
-        fontSize: 14,
+    breakdownToggleText: {
+        color: palette.indigo600,
+        fontSize: 12,
         fontWeight: '700',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        overflow: 'hidden',
     },
-    actionSecondaryLink: {
-        borderRadius: radius.sm,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: '700',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        overflow: 'hidden',
-    },
-    actionDangerButton: {
-        borderRadius: 8,
+    breakdownBox: {
+        borderRadius: radius.md,
+        backgroundColor: palette.pageBg,
         borderWidth: 1,
-        borderColor: colors.error,
-        backgroundColor: colors.errorSurface,
-        paddingHorizontal: 12,
+        borderColor: palette.cardBorder,
+        paddingHorizontal: spacing.md,
+        paddingVertical: spacing.sm,
+        gap: spacing.xs,
+    },
+    breakdownRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+    },
+    breakdownName: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        flex: 1,
+    },
+    breakdownCount: {
+        ...uiType.small,
+        color: palette.textMuted,
+        fontWeight: '600',
+    },
+    divider: {
+        height: 1,
+        backgroundColor: palette.cardBorder,
+    },
+    cardFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+    },
+    metricGroup: {
+        flexDirection: 'row',
+        gap: spacing.md,
+        flexShrink: 1,
+    },
+    metric: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+    },
+    metricText: {
+        ...uiType.small,
+        color: palette.textMuted,
+        fontWeight: '600',
+    },
+    footerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    deleteButton: {
+        width: 32,
+        height: 32,
+        borderRadius: radius.sm,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+    },
+    primaryButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+        backgroundColor: palette.indigo600,
         paddingVertical: 8,
+        paddingHorizontal: 14,
+        borderRadius: radius.sm,
     },
-    actionDangerPressed: {
-        backgroundColor: colors.errorSurface,
-    },
-    actionDangerText: {
-        color: colors.error,
+    primaryButtonText: {
+        color: palette.onDarkPrimary,
         fontSize: 13,
         fontWeight: '700',
+    },
+    emptyCard: {
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingVertical: spacing.xl,
+        paddingHorizontal: spacing.lg,
+        backgroundColor: palette.cardBg,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+    },
+    emptyText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: palette.textSecondary,
+    },
+    emptyHint: {
+        ...uiType.body,
+        color: palette.textMuted,
+        textAlign: 'center',
+    },
+    footnote: {
+        ...uiType.small,
+        color: palette.textMuted,
+        textAlign: 'center',
+    },
+    pressed: {
+        opacity: 0.7,
+    },
+    disabled: {
+        opacity: 0.5,
     },
     errorText: {
-        color: colors.error,
+        color: palette.error,
         fontSize: 14,
     },
     infoText: {
-        color: colors.primary,
+        color: palette.emerald500,
         fontSize: 14,
     },
 });

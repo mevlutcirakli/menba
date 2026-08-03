@@ -96,7 +96,10 @@ serve(async (req) => {
             });
         }
 
-        const safeMaxTopics = Math.min(12, Math.max(3, Number(maxTopics) || 8));
+        // Tavan 12'ydi. Bir YDS kitapciginda 15 ayri soru bolumu var; tavan
+        // dusuk kalinca bolumlerin bir kismi konu alamiyor ve o bolumlerin
+        // sorulari extract-questions tarafindan eslesmedigi icin dusuyordu.
+        const safeMaxTopics = Math.min(20, Math.max(3, Number(maxTopics) || 8));
         const clippedContent = contentText.slice(0, MAX_CONTENT_LENGTH);
 
         const prompt =

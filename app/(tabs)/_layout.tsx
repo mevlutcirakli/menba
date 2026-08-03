@@ -1,17 +1,17 @@
 import { Tabs } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Platform, StyleSheet, View } from 'react-native';
-import { colors, radius } from '../../src/theme/tokens';
+import { palette, radius } from '../../src/theme/tokens';
 
 export default function TabsLayout() {
     return (
         <Tabs
             screenOptions={{
                 headerShown: false,
-                tabBarActiveTintColor: colors.primaryLight,
-                tabBarInactiveTintColor: colors.textMuted,
-                tabBarActiveBackgroundColor: colors.primarySurface,
-                tabBarInactiveBackgroundColor: colors.surface,
+                tabBarActiveTintColor: palette.indigo600,
+                tabBarInactiveTintColor: palette.textMuted,
+                tabBarActiveBackgroundColor: palette.indigoSurface,
+                tabBarInactiveBackgroundColor: palette.cardBg,
                 tabBarHideOnKeyboard: true,
                 tabBarItemStyle: {
                     borderRadius: radius.md,
@@ -22,15 +22,15 @@ export default function TabsLayout() {
                     fontWeight: '700',
                 },
                 tabBarStyle: {
-                    backgroundColor: colors.surface,
-                    borderTopColor: colors.border,
+                    backgroundColor: palette.cardBg,
+                    borderTopColor: palette.cardBorder,
                     borderTopWidth: 1,
                     height: Platform.OS === 'ios' ? 78 : 68,
                     paddingBottom: Platform.OS === 'ios' ? 20 : 10,
                     paddingTop: 8,
                     ...Platform.select({
                         ios: {
-                            shadowColor: colors.textPrimary,
+                            shadowColor: palette.textPrimary,
                             shadowOpacity: 0.08,
                             shadowRadius: 10,
                             shadowOffset: { width: 0, height: -3 },
@@ -61,7 +61,7 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="sources"
                 options={{
-                    title: 'Kaynak',
+                    title: 'Kaynaklar',
                     tabBarIcon: ({ color, size, focused }) => (
                         <View style={[styles.iconWrap, focused ? styles.iconWrapFocused : null]}>
                             <FontAwesome
@@ -76,7 +76,7 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="quiz"
                 options={{
-                    title: 'Test',
+                    title: 'Test Çöz',
                     tabBarIcon: ({ color, size, focused }) => (
                         <View style={[styles.iconWrap, focused ? styles.iconWrapFocused : null]}>
                             <FontAwesome

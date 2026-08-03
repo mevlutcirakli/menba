@@ -1,7 +1,9 @@
-import { useState } from 'react';
-import { Link } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Link } from 'expo-router';
+import { useState } from 'react';
 import {
     ActivityIndicator,
     Pressable,
@@ -11,10 +13,14 @@ import {
     TextInput,
     View,
 } from 'react-native';
-import { useSources, type IngestMode } from '../../src/hooks/useSources';
-import { extractSourceTextFromFile, extractTopicsFromSource } from '../../src/services/geminiService';
 import { AnimatedCard } from '../../src/components/AnimatedCard';
-import { colors, radius, spacing, typography } from '../../src/theme/tokens';
+import { AppHeader } from '../../src/components/AppHeader';
+import { useSources, type IngestMode } from '../../src/hooks/useSources';
+import {
+    extractSourceTextFromFile,
+    extractTopicsFromSource,
+} from '../../src/services/geminiService';
+import { gradients, palette, radius, spacing, uiType } from '../../src/theme/tokens';
 
 const MAX_IMPORT_FILE_SIZE_BYTES = 4 * 1024 * 1024;
 const MAX_SUGGESTED_TOPICS = 8;
@@ -22,28 +28,41 @@ const MAX_AUTO_EXTRACT_QUESTIONS_TOTAL = 80;
 
 type ImportStatus = 'idle' | 'processing' | 'success' | 'error';
 
-const INGEST_MODE_OPTIONS: Array<{ mode: IngestMode; label: string; description: string }> = [
+const INGEST_MODE_OPTIONS: Array<{
+    mode: IngestMode;
+    label: string;
+    description: string;
+    icon: keyof typeof Ionicons.glyphMap;
+}> = [
     {
         mode: 'hybrid',
         label: 'Hibrit (Topic + Soru)',
-        description: 'PDF/metinden konu ve soru bankasi birlikte olusturulur.',
+        description: 'PDF/metinden konu ve soru bankası birlikte otomatik üretilir.',
+        icon: 'sparkles',
     },
     {
         mode: 'questions-only',
-        label: 'Sadece Soru Bankasi',
-        description: 'Metindeki sorular cikarilip bankaya eklenir.',
+        label: 'Sadece Soru Bankası',
+        description: 'İçerikten doğrudan sorular çıkarılıp test bankasına eklenir.',
+        icon: 'help-circle-outline',
     },
     {
         mode: 'topics-only',
         label: 'Sadece Topic',
-        description: 'Soru cikarmadan yalnizca topic yapisi olusturulur.',
+        description: 'Soru çıkarmadan yalnızca ana konu hiyerarşisi oluşturulur.',
+        icon: 'filter-outline',
     },
 ];
 
-function getModeLabel(mode: IngestMode): string {
-    const match = INGEST_MODE_OPTIONS.find((item) => item.mode === mode);
-    return match?.label ?? mode;
-}
+// Su an kullaniciya yalnizca soru bankasi modu gosteriliyor. Diger modlarin
+// kodu (IngestMode tipi, useSources'taki mod isleme, yukaridaki secenekler)
+// bilerek duruyor; ileride geri acilacak. Geri acmak icin bu listeye ilgili
+// mode degerini eklemek yeterli.
+const VISIBLE_INGEST_MODES: IngestMode[] = ['questions-only'];
+
+const VISIBLE_INGEST_MODE_OPTIONS = INGEST_MODE_OPTIONS.filter((item) =>
+    VISIBLE_INGEST_MODES.includes(item.mode)
+);
 
 function estimateQuestionLikeCount(text: string): number {
     const numberedStemCount = text.match(/(?:^|\n)\s*\d{1,3}[.)-]\s+.+/g)?.length ?? 0;
@@ -109,7 +128,7 @@ export default function SourcesScreen() {
     const [importedCharCount, setImportedCharCount] = useState<number>(0);
     const [formError, setFormError] = useState<string | null>(null);
     const [formInfo, setFormInfo] = useState<string | null>(null);
-    const [ingestMode, setIngestMode] = useState<IngestMode>('hybrid');
+    const [ingestMode, setIngestMode] = useState<IngestMode>('questions-only');
     const [lastInsertedQuestionBreakdown, setLastInsertedQuestionBreakdown] = useState<
         Array<{ topicName: string; questionCount: number }>
     >([]);
@@ -124,9 +143,12 @@ export default function SourcesScreen() {
         ingestMode === 'topics-only'
             ? 0
             : Math.min(
-                MAX_AUTO_EXTRACT_QUESTIONS_TOTAL,
-                Math.max(expectedTopicCount * 6, estimatedQuestionCount)
-            );
+                  MAX_AUTO_EXTRACT_QUESTIONS_TOTAL,
+                  Math.max(expectedTopicCount * 6, estimatedQuestionCount)
+              );
+
+    const charCount = contentText.trim().length;
+    const wordCount = contentText.trim() ? contentText.trim().split(/\s+/).length : 0;
 
     const suggestTopics = async (text: string): Promise<number> => {
         const fallbackTopics = extractSuggestedTopics(text);
@@ -147,16 +169,16 @@ export default function SourcesScreen() {
 
             if (aiTopics.length > 0) {
                 setSuggestedTopics(aiTopics);
-                setTopicsInfo('Konu onerileri AI ile olusturuldu.');
+                setTopicsInfo('Konu önerileri AI ile oluşturuldu.');
                 return aiTopics.length;
             }
 
             setSuggestedTopics(fallbackTopics);
-            setTopicsInfo('AI konu onerisi bos dondu. Yerel oneriler gosterildi.');
+            setTopicsInfo('AI konu önerisi boş döndü. Yerel öneriler gösterildi.');
             return fallbackTopics.length;
         } catch {
             setSuggestedTopics(fallbackTopics);
-            setTopicsInfo('AI konu onerisi alinamadi. Yerel oneriler gosterildi.');
+            setTopicsInfo('AI konu önerisi alınamadı. Yerel öneriler gösterildi.');
             return fallbackTopics.length;
         } finally {
             setIsSuggestingTopics(false);
@@ -183,7 +205,7 @@ export default function SourcesScreen() {
         }
 
         const asset = result.assets[0];
-        const filename = asset.name ?? 'Kaynak Dosyasi';
+        const filename = asset.name ?? 'Kaynak Dosyası';
         setSelectedFileName(filename);
         const lowerName = filename.toLowerCase();
         const isPdf = asset.mimeType === 'application/pdf' || lowerName.endsWith('.pdf');
@@ -191,8 +213,8 @@ export default function SourcesScreen() {
 
         if (asset.size && asset.size > MAX_IMPORT_FILE_SIZE_BYTES) {
             setImportStatus('error');
-            setImportStatusText('Dosya boyutu limiti asildi.');
-            setFormError('Dosya cok buyuk. Lutfen 4MB altinda bir dosya sec.');
+            setImportStatusText('Dosya boyutu limiti aşıldı.');
+            setFormError('Dosya çok büyük. Lütfen 4MB altında bir dosya seç.');
             return;
         }
 
@@ -202,7 +224,7 @@ export default function SourcesScreen() {
 
         if (isText) {
             setImportStatus('processing');
-            setImportStatusText('Metin dosyasi okunuyor...');
+            setImportStatusText('Metin dosyası okunuyor...');
             try {
                 const fileText = await FileSystemLegacy.readAsStringAsync(asset.uri);
                 setContentText(fileText);
@@ -210,31 +232,33 @@ export default function SourcesScreen() {
                 setImportStatus('success');
                 if (isQuestionsOnlyMode) {
                     setSuggestedTopics([]);
-                    setTopicsInfo('Sadece soru bankasi modunda konu onerisi adimi atlandi.');
+                    setTopicsInfo('Sadece soru bankası modunda konu önerisi adımı atlandı.');
                     setImportStatusText(
-                        `Metin basariyla alindi (${fileText.trim().length} karakter). Icerik gizli tutuldu, soru hazirligi arka planda yapilacak.`
-                    );
-                    setFormInfo('Dosya hazir. Kaydet dediginde soru bankasi arka planda olusturulacak.');
-                } else {
-                    setImportStatusText(
-                        `Metin basariyla alindi (${fileText.trim().length} karakter). Konu onerileri arka planda hazirlaniyor...`
+                        'Metin alındı. İçerik gizli tutuldu, soru hazırlığı arka planda yapılacak.'
                     );
                     setFormInfo(
-                        'Metin dosyasi okundu. Metin kutusu dolduysa islem tamam; inceleyip kaydedebilirsin.'
+                        'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
+                    );
+                } else {
+                    setImportStatusText(
+                        'Metin alındı. Konu önerileri arka planda hazırlanıyor...'
+                    );
+                    setFormInfo(
+                        'Metin dosyası okundu. Metin kutusu dolduysa işlem tamam; inceleyip kaydedebilirsin.'
                     );
                     void suggestTopics(fileText).then((topicCount) => {
                         setImportStatusText(
-                            `Metin basariyla alindi (${fileText.trim().length} karakter, ${topicCount} konu onerisi).`
+                            `Metin alındı, ${topicCount} konu önerisi hazırlandı.`
                         );
                     });
                 }
             } catch (readError) {
                 setImportStatus('error');
-                setImportStatusText('Metin dosyasi okunamadi.');
+                setImportStatusText('Metin dosyası okunamadı.');
                 setFormError(
                     readError instanceof Error
                         ? readError.message
-                        : 'Dosya okunamadi. Lutfen tekrar dene.'
+                        : 'Dosya okunamadı. Lütfen tekrar dene.'
                 );
             }
             return;
@@ -243,8 +267,8 @@ export default function SourcesScreen() {
         if (isPdf) {
             setIsImportingFile(true);
             setImportStatus('processing');
-            setImportStatusText('PDF metni cikariliyor...');
-            setFormInfo('PDF metni cikariliyor...');
+            setImportStatusText('PDF metni çıkarılıyor...');
+            setFormInfo('PDF metni çıkarılıyor...');
 
             try {
                 const base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, {
@@ -259,7 +283,7 @@ export default function SourcesScreen() {
 
                 if (!extractedText.trim()) {
                     setFormError(
-                        'PDF dosyasindan metin cikarilamadi. Farkli bir PDF dene veya metni manuel ekle.'
+                        'PDF dosyasından metin çıkarılamadı. Farklı bir PDF dene veya metni manuel ekle.'
                     );
                     return;
                 }
@@ -269,31 +293,33 @@ export default function SourcesScreen() {
                 setImportStatus('success');
                 if (isQuestionsOnlyMode) {
                     setSuggestedTopics([]);
-                    setTopicsInfo('Sadece soru bankasi modunda konu onerisi adimi atlandi.');
+                    setTopicsInfo('Sadece soru bankası modunda konu önerisi adımı atlandı.');
                     setImportStatusText(
-                        `PDF metni basariyla cikarildi (${extractedText.trim().length} karakter). Icerik gizli tutuldu, soru hazirligi arka planda yapilacak.`
-                    );
-                    setFormInfo('Dosya hazir. Kaydet dediginde soru bankasi arka planda olusturulacak.');
-                } else {
-                    setImportStatusText(
-                        `PDF metni basariyla cikarildi (${extractedText.trim().length} karakter). Konu onerileri arka planda hazirlaniyor...`
+                        'PDF metni çıkarıldı. İçerik gizli tutuldu, soru hazırlığı arka planda yapılacak.'
                     );
                     setFormInfo(
-                        'Metin kutusu dolduysa PDF basariyla islenmistir; dilersen duzenleyip kaydedebilirsin.'
+                        'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
+                    );
+                } else {
+                    setImportStatusText(
+                        'PDF metni çıkarıldı. Konu önerileri arka planda hazırlanıyor...'
+                    );
+                    setFormInfo(
+                        'Metin kutusu dolduysa PDF başarıyla işlenmiştir; dilersen düzenleyip kaydedebilirsin.'
                     );
                     void suggestTopics(extractedText).then((topicCount) => {
                         setImportStatusText(
-                            `PDF metni basariyla cikarildi (${extractedText.trim().length} karakter, ${topicCount} konu onerisi).`
+                            `PDF metni çıkarıldı, ${topicCount} konu önerisi hazırlandı.`
                         );
                     });
                 }
             } catch (extractError) {
                 setImportStatus('error');
-                setImportStatusText('PDF isleme basarisiz oldu.');
+                setImportStatusText('PDF işleme başarısız oldu.');
                 setFormError(
                     extractError instanceof Error
                         ? extractError.message
-                        : 'PDF islenirken hata olustu. Lutfen tekrar dene.'
+                        : 'PDF işlenirken hata oluştu. Lütfen tekrar dene.'
                 );
             } finally {
                 setIsImportingFile(false);
@@ -303,20 +329,34 @@ export default function SourcesScreen() {
         }
 
         setImportStatus('error');
-        setImportStatusText('Secilen dosya turu desteklenmiyor.');
-        setFormError('Bu dosya turu desteklenmiyor. Lutfen .txt veya .pdf sec.');
+        setImportStatusText('Seçilen dosya türü desteklenmiyor.');
+        setFormError('Bu dosya türü desteklenmiyor. Lütfen .txt veya .pdf seç.');
     };
 
     const handleCreateSource = async () => {
         if (!title.trim()) {
-            setFormError('Kaynak basligi zorunludur.');
+            setFormError('Kaynak başlığı zorunludur.');
+            return;
+        }
+
+        // Konu onerileri arka planda uretiliyorken kaydedilirse konu listesi bos
+        // gider ve kaynak konusuz/sorusuz kaydedilirdi.
+        if (isSuggestingTopics) {
+            setFormError(
+                'Konu önerileri hâlâ hazırlanıyor. Birkaç saniye bekleyip tekrar dene.'
+            );
+            return;
+        }
+
+        if (isImportingFile) {
+            setFormError('Dosya hâlâ işleniyor. İşlem bitince kaydedebilirsin.');
             return;
         }
 
         if (!contentText.trim()) {
             setFormError(
                 isQuestionsOnlyMode
-                    ? 'Sadece soru bankasi modunda once bir dosya secmelisin.'
+                    ? 'Sadece soru bankası modunda önce bir dosya seçmelisin.'
                     : 'Kaynak metni zorunludur.'
             );
             return;
@@ -339,18 +379,28 @@ export default function SourcesScreen() {
             setContentText('');
             setSuggestedTopics([]);
 
+            if (result.warning) {
+                setFormError(result.warning);
+            }
+
             const duplicateInfo =
                 result.skippedDuplicateQuestionCount > 0
-                    ? ` ${result.skippedDuplicateQuestionCount} tekrar soru atlandi.`
+                    ? ` ${result.skippedDuplicateQuestionCount} tekrar soru atlandı.`
                     : '';
             const similarInfo =
                 result.skippedSimilarQuestionCount > 0
-                    ? ` ${result.skippedSimilarQuestionCount} benzer soru atlandi.`
+                    ? ` ${result.skippedSimilarQuestionCount} benzer soru atlandı.`
+                    : '';
+            // Kaynakta karsiligi olmayan sorular sessizce elenmesin: kullanici
+            // modelin uydurmaya calistigini gormeli.
+            const ungroundedInfo =
+                result.skippedUngroundedQuestionCount > 0
+                    ? ` ${result.skippedUngroundedQuestionCount} soru kaynak metinde bulunamadığı için elendi.`
                     : '';
 
             if (result.appliedIngestMode === 'topics-only') {
                 setFormInfo(
-                    `Kaynak basariyla kaydedildi. Sadece topic modu tamamlandi: ${result.insertedTopicCount} topic eklendi.`
+                    `Kaynak başarıyla kaydedildi. Sadece topic modu tamamlandı: ${result.insertedTopicCount} topic eklendi.`
                 );
                 setLastInsertedQuestionBreakdown([]);
                 return;
@@ -358,7 +408,7 @@ export default function SourcesScreen() {
 
             if (result.appliedIngestMode === 'questions-only') {
                 setFormInfo(
-                    `Kaynak basariyla kaydedildi. Sadece soru bankasi modu tamamlandi: ${result.insertedQuestionCount} soru eklendi.${duplicateInfo}${similarInfo}`
+                    `Kaynak başarıyla kaydedildi. Sadece soru bankası modu tamamlandı: ${result.insertedQuestionCount} soru eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
                 );
                 setLastInsertedQuestionBreakdown(result.insertedQuestionCountByTopic);
                 return;
@@ -366,13 +416,13 @@ export default function SourcesScreen() {
 
             if (result.insertedTopicCount > 0 || result.insertedQuestionCount > 0) {
                 setFormInfo(
-                    `Kaynak basariyla kaydedildi. Hibrit mod tamamlandi: ${result.insertedTopicCount} topic, ${result.insertedQuestionCount} soru eklendi.${duplicateInfo}${similarInfo}`
+                    `Kaynak başarıyla kaydedildi. Hibrit mod tamamlandı: ${result.insertedTopicCount} topic, ${result.insertedQuestionCount} soru eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
                 );
                 setLastInsertedQuestionBreakdown(result.insertedQuestionCountByTopic);
                 return;
             }
 
-            setFormInfo('Kaynak basariyla kaydedildi.');
+            setFormInfo('Kaynak başarıyla kaydedildi.');
         } catch (createError) {
             setFormError(
                 createError instanceof Error ? createError.message : 'Kaynak kaydedilemedi.'
@@ -383,596 +433,638 @@ export default function SourcesScreen() {
     };
 
     return (
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-            <View style={styles.heroCard}>
-                <View style={styles.heroTopRow}>
-                    <View style={styles.heroIconWrap}>
-                        <Text style={styles.heroIconText}>K</Text>
-                    </View>
-                    <Text style={styles.heroBadge}>Kaynak Merkezi</Text>
-                </View>
-                <Text style={styles.title}>Kaynaklarini Akilli Sekilde Islet</Text>
-                <Text style={styles.description}>
-                    PDF veya metin yukle, modu sec ve topic/soru bankasini otomatik olustur.
-                </Text>
-            </View>
+        <View style={styles.screen}>
+            <AppHeader />
 
-            <AnimatedCard style={styles.card} delayMs={20} resetKey="create-source-card">
-                <Text style={styles.sectionTitle}>Yeni Kaynak Ekle</Text>
-                <View style={styles.modeContainer}>
-                    <Text style={styles.topicTitle}>Islem Modu</Text>
-                    {INGEST_MODE_OPTIONS.map((item) => {
+            <ScrollView
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+            >
+                <LinearGradient
+                    colors={gradients.hero}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.hero}
+                >
+                    <Text style={styles.heroEyebrow}>AI DESTEKLİ KAYNAK İŞLEME</Text>
+                    <Text style={styles.heroTitle}>Kaynağını Akıllı Şekilde İşle</Text>
+                    <Text style={styles.heroDescription}>
+                        PDF veya metin yükle, işleme modunu seç; konular ve soru bankası
+                        otomatik üretilsin.
+                    </Text>
+                </LinearGradient>
+
+                <AnimatedCard style={styles.panel} delayMs={20} resetKey="create-source-card">
+                    <Text style={styles.sectionLabel}>
+                        1. BELGE YÜKLE VEYA METİN YAPIŞTIR
+                    </Text>
+
+                    <Pressable
+                        style={({ pressed }) => [
+                            styles.dropzone,
+                            pressed ? styles.pressed : null,
+                            isImportingFile ? styles.disabled : null,
+                        ]}
+                        onPress={() => void handlePickFile()}
+                        disabled={isImportingFile || isSubmitting}
+                    >
+                        <View style={styles.dropzoneIcon}>
+                            {isImportingFile ? (
+                                <ActivityIndicator size="small" color={palette.indigo600} />
+                            ) : (
+                                <Ionicons
+                                    name="cloud-upload-outline"
+                                    size={22}
+                                    color={palette.indigo600}
+                                />
+                            )}
+                        </View>
+                        <Text style={styles.dropzoneTitle}>
+                            {isImportingFile ? 'Dosya işleniyor...' : 'Dosya Seçin'}
+                        </Text>
+                        <Text style={styles.dropzoneHint}>
+                            Desteklenen formatlar: TXT, PDF
+                        </Text>
+                        {selectedFileName ? (
+                            <Text style={styles.dropzoneFile} numberOfLines={1}>
+                                {selectedFileName}
+                            </Text>
+                        ) : null}
+                    </Pressable>
+
+                    <Text style={styles.fieldLabel}>KAYNAK BAŞLIĞI</Text>
+                    <TextInput
+                        value={title}
+                        onChangeText={setTitle}
+                        placeholder="Örn: YDS Grammar Notları"
+                        placeholderTextColor={palette.textMuted}
+                        style={styles.input}
+                    />
+
+                    {!isQuestionsOnlyMode ? (
+                        <>
+                            <View style={styles.fieldLabelRow}>
+                                <Text style={styles.fieldLabel}>KAYNAK İÇERİĞİ</Text>
+                                <Text style={styles.counterText}>
+                                    {charCount} Karakter (~{wordCount} Kelime)
+                                </Text>
+                            </View>
+                            <TextInput
+                                value={contentText}
+                                onChangeText={setContentText}
+                                placeholder="Öğrenmek ve soru bankasına dönüştürmek istediğin ders notlarını buraya yapıştır..."
+                                placeholderTextColor={palette.textMuted}
+                                style={[styles.input, styles.textarea]}
+                                multiline
+                                textAlignVertical="top"
+                            />
+
+                            <Pressable
+                                style={({ pressed }) => [
+                                    styles.ghostButton,
+                                    pressed ? styles.pressed : null,
+                                ]}
+                                onPress={() => {
+                                    void suggestTopics(contentText);
+                                }}
+                                disabled={
+                                    !contentText.trim() ||
+                                    isSubmitting ||
+                                    isImportingFile ||
+                                    isSuggestingTopics
+                                }
+                            >
+                                <Ionicons
+                                    name="sparkles-outline"
+                                    size={14}
+                                    color={palette.indigo600}
+                                />
+                                <Text style={styles.ghostButtonText}>
+                                    {isSuggestingTopics
+                                        ? 'Konu Önerileri Üretiliyor...'
+                                        : 'Konu Önerilerini Yenile'}
+                                </Text>
+                            </Pressable>
+                        </>
+                    ) : (
+                        <View style={styles.noticeBox}>
+                            <Text style={styles.noticeTitle}>Soru İçeriği Gizli Mod</Text>
+                            <Text style={styles.noticeText}>
+                                Dosya seçildikten sonra soru metni ekranda gösterilmez.
+                            </Text>
+                            <Text style={styles.noticeText}>
+                                Hazır veri:{' '}
+                                {importedCharCount > 0
+                                    ? `${importedCharCount} karakter`
+                                    : '—'}
+                            </Text>
+                        </View>
+                    )}
+
+                    {importStatus !== 'idle' ? (
+                        <View
+                            style={[
+                                styles.statusCard,
+                                importStatus === 'success'
+                                    ? styles.statusCardSuccess
+                                    : importStatus === 'error'
+                                      ? styles.statusCardError
+                                      : styles.statusCardProcessing,
+                            ]}
+                        >
+                            <View style={styles.statusHeader}>
+                                <Text style={styles.statusTitle}>
+                                    {importStatus === 'processing'
+                                        ? 'İşlem Sürüyor'
+                                        : importStatus === 'success'
+                                          ? 'İşlem Tamamlandı'
+                                          : 'İşlem Başarısız'}
+                                </Text>
+                                {importStatus === 'processing' ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={palette.indigo600}
+                                    />
+                                ) : null}
+                            </View>
+                            {importStatusText ? (
+                                <Text style={styles.statusDetail}>{importStatusText}</Text>
+                            ) : null}
+                            {isSuggestingTopics ? (
+                                <View style={styles.inlineStatusRow}>
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={palette.indigo600}
+                                    />
+                                    <Text style={styles.statusDetail}>
+                                        Konu önerileri hazırlanıyor...
+                                    </Text>
+                                </View>
+                            ) : null}
+                        </View>
+                    ) : null}
+
+                    {suggestedTopics.length > 0 && !isQuestionsOnlyMode ? (
+                        <View style={styles.topicBlock}>
+                            <Text style={styles.fieldLabel}>TESPİT EDİLEN KONULAR</Text>
+                            <View style={styles.topicList}>
+                                {suggestedTopics.map((topic) => (
+                                    <View key={topic} style={styles.topicPill}>
+                                        <Text style={styles.topicPillText}>{topic}</Text>
+                                    </View>
+                                ))}
+                            </View>
+                        </View>
+                    ) : null}
+
+                    <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>
+                        2. AI İŞLEME MODU SEÇİMİ
+                    </Text>
+
+                    {VISIBLE_INGEST_MODE_OPTIONS.map((item) => {
                         const isActive = ingestMode === item.mode;
+
                         return (
                             <Pressable
                                 key={item.mode}
                                 onPress={() => setIngestMode(item.mode)}
                                 style={({ pressed }) => [
-                                    styles.modeOption,
-                                    isActive ? styles.modeOptionActive : null,
-                                    pressed ? styles.pressablePressed : null,
+                                    styles.modeCard,
+                                    isActive ? styles.modeCardActive : null,
+                                    pressed ? styles.pressed : null,
                                 ]}
                             >
-                                <Text
+                                <View
                                     style={[
-                                        styles.modeOptionTitle,
-                                        isActive ? styles.modeOptionTitleActive : null,
+                                        styles.modeIcon,
+                                        isActive ? styles.modeIconActive : null,
                                     ]}
                                 >
-                                    {item.label}
-                                </Text>
-                                <Text
-                                    style={[
-                                        styles.modeOptionDescription,
-                                        isActive ? styles.modeOptionDescriptionActive : null,
-                                    ]}
-                                >
-                                    {item.description}
-                                </Text>
+                                    <Ionicons
+                                        name={item.icon}
+                                        size={18}
+                                        color={
+                                            isActive
+                                                ? palette.onDarkPrimary
+                                                : palette.textMuted
+                                        }
+                                    />
+                                </View>
+
+                                <View style={styles.modeTextBlock}>
+                                    <Text style={styles.modeTitle}>{item.label}</Text>
+                                    <Text style={styles.modeDescription}>
+                                        {item.description}
+                                    </Text>
+                                </View>
+
+                                {isActive ? (
+                                    <Ionicons
+                                        name="checkmark-circle"
+                                        size={19}
+                                        color={palette.indigo600}
+                                    />
+                                ) : null}
                             </Pressable>
                         );
                     })}
-                    <View style={styles.expectedCard}>
-                        <Text style={styles.expectedTitle}>Beklenen Islem Ozeti</Text>
+
+                    <View style={styles.expectedBox}>
+                        <Text style={styles.expectedTitle}>Beklenen İşlem Özeti</Text>
                         {ingestMode === 'topics-only' ? (
                             <Text style={styles.expectedText}>
-                                Tahmini: {expectedTopicCount} topic eklenecek, soru bankasi uretilmeyecek.
+                                Tahmini: {expectedTopicCount} topic eklenecek, soru bankası
+                                üretilmeyecek.
                             </Text>
                         ) : ingestMode === 'questions-only' ? (
                             <Text style={styles.expectedText}>
-                                Tahmini: ~{expectedQuestionCount} soru soru bankasina eklenecek.
+                                Tahmini: ~{expectedQuestionCount} soru bankaya eklenecek.
                                 {suggestedTopics.length > 0
-                                    ? ` Dagitim ${suggestedTopics.length} topic uzerinden yapilacak.`
-                                    : ' Topic girilmediyse Genel Soru Bankasi topici acilacak.'}
+                                    ? ` Dağıtım ${suggestedTopics.length} topic üzerinden yapılacak.`
+                                    : ' Topic girilmediyse Genel Soru Bankası topiği açılacak.'}
                             </Text>
                         ) : (
                             <Text style={styles.expectedText}>
-                                Tahmini: {expectedTopicCount} topic ve ~{expectedQuestionCount} soru
-                                olusturulacak.
+                                Tahmini: {expectedTopicCount} topic ve ~
+                                {expectedQuestionCount} soru oluşturulacak.
                             </Text>
                         )}
                     </View>
-                </View>
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.secondaryButton,
-                        pressed ? styles.secondaryButtonPressed : null,
-                        isImportingFile ? styles.buttonDisabled : null,
-                    ]}
-                    onPress={() => void handlePickFile()}
-                    disabled={isImportingFile || isSubmitting}
-                >
-                    <Text style={styles.secondaryGlyph}>UP</Text>
-                    <Text style={styles.secondaryButtonText}>
-                        {isImportingFile ? 'Dosya isleniyor...' : 'Dosya Sec (.txt / .pdf)'}
-                    </Text>
-                </Pressable>
-                <TextInput
-                    value={title}
-                    onChangeText={setTitle}
-                    placeholder="Ornek: YDS Grammar Notlari"
-                    style={styles.input}
-                />
-                {!isQuestionsOnlyMode ? (
-                    <TextInput
-                        value={contentText}
-                        onChangeText={setContentText}
-                        placeholder="Kaynak metnini buraya yapistir"
-                        style={[styles.input, styles.textarea]}
-                        multiline
-                        textAlignVertical="top"
-                    />
-                ) : (
-                    <View style={styles.compactInfoCard}>
-                        <Text style={styles.compactInfoTitle}>Soru Icerigi Gizli Mod</Text>
-                        <Text style={styles.compactInfoText}>
-                            Dosya secildikten sonra soru metni ekranda gosterilmez.
-                        </Text>
-                        <Text style={styles.compactInfoText}>
-                            Hazir veri: {importedCharCount > 0 ? `${importedCharCount} karakter` : '-'}
-                        </Text>
-                    </View>
-                )}
-                {!isQuestionsOnlyMode ? (
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.secondaryButton,
-                            pressed ? styles.secondaryButtonPressed : null,
-                        ]}
-                        onPress={() => {
-                            void suggestTopics(contentText);
-                        }}
-                        disabled={
-                            !contentText.trim() || isSubmitting || isImportingFile || isSuggestingTopics
-                        }
-                    >
-                        <Text style={styles.secondaryGlyph}>AI</Text>
-                        <Text style={styles.secondaryButtonText}>
-                            {isSuggestingTopics ? 'Konu Onerileri Uretiliyor...' : 'Konu Onerilerini Yenile'}
-                        </Text>
-                    </Pressable>
-                ) : null}
-                {importStatus !== 'idle' ? (
-                    <View
-                        style={[
-                            styles.importStatusCard,
-                            importStatus === 'success'
-                                ? styles.importStatusCardSuccess
-                                : importStatus === 'error'
-                                    ? styles.importStatusCardError
-                                    : styles.importStatusCardProcessing,
-                        ]}
-                    >
-                        <View style={styles.importStatusHeader}>
-                            <Text style={styles.importStatusTitle}>
-                                {importStatus === 'processing'
-                                    ? 'Islem Suruyor'
-                                    : importStatus === 'success'
-                                        ? 'Islem Tamamlandi'
-                                        : 'Islem Basarisiz'}
-                            </Text>
-                            {importStatus === 'processing' ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                            ) : null}
-                        </View>
-                        {selectedFileName ? (
-                            <Text style={styles.importStatusDetail}>Dosya: {selectedFileName}</Text>
-                        ) : null}
-                        {importStatusText ? (
-                            <Text style={styles.importStatusDetail}>{importStatusText}</Text>
-                        ) : null}
-                        {isSuggestingTopics ? (
-                            <View style={styles.inlineStatusRow}>
-                                <ActivityIndicator size="small" color={colors.primary} />
-                                <Text style={styles.importStatusDetail}>Konu onerileri hazirlaniyor...</Text>
-                            </View>
-                        ) : null}
-                        {importStatus === 'success' && importedCharCount > 0 ? (
-                            <Text style={styles.importStatusDetail}>
-                                Kontrol: Metin kutusu dolu ve karakter sayisi {importedCharCount}.
-                            </Text>
-                        ) : null}
-                    </View>
-                ) : null}
-                {suggestedTopics.length > 0 && !isQuestionsOnlyMode ? (
-                    <View style={styles.topicContainer}>
-                        <Text style={styles.topicTitle}>Onerilen Konular</Text>
-                        <View style={styles.topicList}>
-                            {suggestedTopics.map((topic) => (
-                                <View key={topic} style={styles.topicPill}>
-                                    <Text style={styles.topicPillText}>{topic}</Text>
+
+                    {topicsInfo ? <Text style={styles.infoText}>{topicsInfo}</Text> : null}
+                    {formInfo ? <Text style={styles.infoText}>{formInfo}</Text> : null}
+
+                    {lastInsertedQuestionBreakdown.length > 0 ? (
+                        <View style={styles.breakdownBox}>
+                            <Text style={styles.fieldLabel}>SON YÜKLEME SORU DAĞILIMI</Text>
+                            {lastInsertedQuestionBreakdown.map((item) => (
+                                <View key={item.topicName} style={styles.breakdownRow}>
+                                    <Text style={styles.breakdownName} numberOfLines={1}>
+                                        {item.topicName}
+                                    </Text>
+                                    <Text style={styles.breakdownCount}>
+                                        {item.questionCount} soru
+                                    </Text>
                                 </View>
                             ))}
                         </View>
-                    </View>
-                ) : null}
-                {topicsInfo ? <Text style={styles.infoText}>{topicsInfo}</Text> : null}
-                {formInfo ? <Text style={styles.infoText}>{formInfo}</Text> : null}
-                {lastInsertedQuestionBreakdown.length > 0 ? (
-                    <View style={styles.topicContainer}>
-                        <Text style={styles.topicTitle}>Son Yukleme Soru Dagilimi</Text>
-                        {lastInsertedQuestionBreakdown.map((item) => (
-                            <Text key={item.topicName} style={styles.sourceMeta}>
-                                {item.topicName}: {item.questionCount} soru
-                            </Text>
-                        ))}
-                    </View>
-                ) : null}
-                {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.button,
-                        pressed ? styles.buttonPressed : null,
-                        isSubmitting ? styles.buttonDisabled : null,
-                    ]}
-                    onPress={handleCreateSource}
-                    disabled={isSubmitting}
-                >
-                    <Text style={styles.primaryGlyph}>OK</Text>
-                    <Text style={styles.buttonText}>
-                        {isSubmitting
-                            ? 'Kaydediliyor...'
-                            : ingestMode === 'topics-only'
-                                ? 'Kaynak Kaydet (Sadece Topic)'
-                                : ingestMode === 'questions-only'
-                                    ? 'Kaynak Kaydet (Sadece Soru Bankasi)'
-                                    : 'Kaynak Kaydet (Hibrit)'}
-                    </Text>
-                </Pressable>
-                <Link href="/(tabs)/sources" style={styles.listLinkButton}>
-                    Kaynak Listesine Git
-                </Link>
-            </AnimatedCard>
-        </ScrollView>
+                    ) : null}
+
+                    {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
+
+                    <Pressable
+                        style={({ pressed }) => [
+                            styles.submitButton,
+                            pressed ? styles.pressed : null,
+                            isSubmitting ? styles.disabled : null,
+                        ]}
+                        onPress={handleCreateSource}
+                        disabled={isSubmitting || isSuggestingTopics || isImportingFile}
+                    >
+                        {isSubmitting ? (
+                            <ActivityIndicator size="small" color={palette.onDarkPrimary} />
+                        ) : (
+                            <Ionicons
+                                name="sparkles"
+                                size={16}
+                                color={palette.onDarkPrimary}
+                            />
+                        )}
+                        <Text style={styles.submitButtonText}>
+                            {isSubmitting ? 'İşleniyor...' : 'AI ile Analiz Et ve Üret'}
+                        </Text>
+                    </Pressable>
+
+                    <Link href="/(tabs)/sources" asChild>
+                        <Pressable
+                            style={({ pressed }) => [
+                                styles.ghostButton,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Ionicons
+                                name="albums-outline"
+                                size={14}
+                                color={palette.indigo600}
+                            />
+                            <Text style={styles.ghostButtonText}>Kaynak Listesine Git</Text>
+                        </Pressable>
+                    </Link>
+                </AnimatedCard>
+            </ScrollView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+        backgroundColor: palette.pageBg,
+    },
     container: {
         padding: spacing.lg,
         gap: spacing.md,
-        backgroundColor: colors.background,
+        paddingBottom: spacing.xl,
     },
-    heroCard: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.xl,
-        padding: 16,
+    hero: {
+        borderRadius: radius.lg,
+        padding: spacing.lg,
         gap: spacing.sm,
-        backgroundColor: colors.surface,
     },
-    heroTopRow: {
-        flexDirection: 'row',
+    heroEyebrow: {
+        color: palette.indigo300,
+        fontSize: 11,
+        fontWeight: '800',
+        letterSpacing: 0.9,
+    },
+    heroTitle: {
+        color: palette.onDarkPrimary,
+        fontSize: 24,
+        fontWeight: '800',
+    },
+    heroDescription: {
+        color: palette.onDarkMuted,
+        fontSize: 14,
+        lineHeight: 21,
+    },
+    panel: {
+        backgroundColor: palette.cardBg,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        padding: spacing.md,
+        gap: spacing.sm,
+    },
+    sectionLabel: {
+        ...uiType.statLabel,
+        color: palette.textSecondary,
+    },
+    sectionLabelSpaced: {
+        marginTop: spacing.md,
+    },
+    dropzone: {
         alignItems: 'center',
-        gap: 8,
+        gap: spacing.xs,
+        paddingVertical: spacing.xl,
+        paddingHorizontal: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor: palette.indigoBorder,
+        backgroundColor: palette.pageBg,
     },
-    heroIconWrap: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
+    dropzoneIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: radius.md,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: colors.primarySurface,
+        backgroundColor: palette.indigoSurface,
+        marginBottom: spacing.xs,
     },
-    heroIconText: {
-        color: colors.primary,
-        fontSize: 13,
+    dropzoneTitle: {
+        fontSize: 14,
         fontWeight: '700',
+        color: palette.textPrimary,
     },
-    heroBadge: {
-        color: colors.primary,
-        fontSize: 12,
+    dropzoneHint: {
+        ...uiType.small,
+        color: palette.textMuted,
+    },
+    dropzoneFile: {
+        ...uiType.small,
+        color: palette.indigo600,
         fontWeight: '700',
+        marginTop: spacing.xs,
+        maxWidth: '100%',
     },
-    title: {
-        ...typography.title,
-        color: colors.textPrimary,
+    fieldLabel: {
+        ...uiType.statLabel,
+        color: palette.textSecondary,
+        marginTop: spacing.sm,
     },
-    description: {
-        fontSize: 16,
-        color: colors.textSecondary,
-        lineHeight: 24,
+    fieldLabelRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
     },
-    card: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.lg,
-        padding: spacing.md,
-        gap: 10,
-        backgroundColor: colors.surface,
-    },
-    sectionTitle: {
-        ...typography.heading,
-        color: colors.textPrimary,
+    counterText: {
+        ...uiType.small,
+        color: palette.textMuted,
     },
     input: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.md,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 15,
-        color: colors.textPrimary,
-        backgroundColor: colors.surface,
+        paddingHorizontal: spacing.md,
+        paddingVertical: 11,
+        fontSize: 14,
+        color: palette.textPrimary,
+        backgroundColor: palette.cardBg,
     },
     textarea: {
-        minHeight: 120,
+        minHeight: 150,
+        paddingTop: spacing.md,
     },
-    modeContainer: {
-        gap: 8,
-    },
-    modeOption: {
-        borderWidth: 1,
-        borderColor: colors.border,
+    ghostButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: spacing.sm,
+        paddingVertical: 10,
         borderRadius: radius.md,
-        paddingHorizontal: 10,
-        paddingVertical: 9,
-        gap: 2,
-        backgroundColor: colors.surface,
+        borderWidth: 1,
+        borderColor: palette.indigoBorder,
+        backgroundColor: palette.indigoSurface,
     },
-    modeOptionActive: {
-        borderColor: colors.primary,
-        backgroundColor: colors.primarySurface,
-    },
-    modeOptionTitle: {
-        color: colors.textPrimary,
+    ghostButtonText: {
+        color: palette.indigo600,
         fontSize: 13,
         fontWeight: '700',
     },
-    modeOptionTitleActive: {
-        color: colors.primary,
-    },
-    modeOptionDescription: {
-        color: colors.textMuted,
-        fontSize: 12,
-    },
-    modeOptionDescriptionActive: {
-        color: colors.primary,
-    },
-    expectedCard: {
+    noticeBox: {
         borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        paddingHorizontal: 10,
-        paddingVertical: 9,
-        gap: 2,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.pageBg,
+        padding: spacing.md,
+        gap: spacing.xs,
     },
-    expectedTitle: {
-        color: colors.textPrimary,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    expectedText: {
-        color: colors.primary,
-        fontSize: 12,
-        lineHeight: 18,
-    },
-    compactInfoCard: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        paddingHorizontal: 10,
-        paddingVertical: 10,
-        gap: 4,
-    },
-    compactInfoTitle: {
-        color: colors.primary,
+    noticeTitle: {
         fontSize: 13,
         fontWeight: '700',
+        color: palette.textPrimary,
     },
-    compactInfoText: {
-        color: colors.textSecondary,
-        fontSize: 12,
-        lineHeight: 18,
+    noticeText: {
+        ...uiType.small,
+        color: palette.textSecondary,
     },
-    button: {
-        backgroundColor: colors.primary,
+    statusCard: {
         borderRadius: radius.md,
-        paddingVertical: 12,
+        borderWidth: 1,
+        padding: spacing.md,
+        gap: spacing.xs,
+    },
+    statusCardProcessing: {
+        borderColor: palette.indigoBorder,
+        backgroundColor: palette.indigoSurface,
+    },
+    statusCardSuccess: {
+        borderColor: palette.emerald500,
+        backgroundColor: palette.emeraldSurface,
+    },
+    statusCardError: {
+        borderColor: palette.error,
+        backgroundColor: '#fef2f2',
+    },
+    statusHeader: {
+        flexDirection: 'row',
         alignItems: 'center',
-        flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 8,
-    },
-    secondaryButton: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: colors.border,
-        paddingVertical: 10,
-        alignItems: 'center',
-        flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: colors.surface,
-    },
-    secondaryButtonText: {
-        color: colors.textPrimary,
-        fontSize: 14,
-        fontWeight: '700',
-    },
-    secondaryGlyph: {
-        color: colors.textMuted,
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    buttonDisabled: {
-        opacity: 0.6,
-    },
-    pressablePressed: {
-        opacity: 0.8,
-    },
-    buttonPressed: {
-        backgroundColor: colors.primaryLight,
-    },
-    secondaryButtonPressed: {
-        backgroundColor: colors.primarySurface,
-    },
-    buttonText: {
-        color: colors.surface,
-        fontSize: 15,
-        fontWeight: '700',
-    },
-    listLinkButton: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 14,
-        fontWeight: '700',
-        paddingVertical: 10,
-        textAlign: 'center',
-        overflow: 'hidden',
-    },
-    primaryGlyph: {
-        color: colors.primarySurface,
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    errorText: {
-        color: colors.error,
-        fontSize: 14,
-    },
-    infoText: {
-        color: colors.primary,
-        fontSize: 14,
-    },
-    importStatusCard: {
-        borderRadius: 10,
-        borderWidth: 1,
-        padding: 10,
-        gap: 6,
-    },
-    importStatusCardProcessing: {
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-    },
-    importStatusCardSuccess: {
-        borderColor: colors.success,
-        backgroundColor: colors.successSurface,
-    },
-    importStatusCardError: {
-        borderColor: colors.error,
-        backgroundColor: colors.errorSurface,
-    },
-    importStatusHeader: {
-        flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'center',
+        gap: spacing.sm,
     },
-    importStatusTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: colors.textPrimary,
-    },
-    importStatusDetail: {
+    statusTitle: {
         fontSize: 13,
-        color: colors.textSecondary,
+        fontWeight: '700',
+        color: palette.textPrimary,
+    },
+    statusDetail: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        lineHeight: 17,
     },
     inlineStatusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: spacing.sm,
     },
-    topicContainer: {
-        gap: 8,
-    },
-    topicTitle: {
-        color: colors.textPrimary,
-        fontSize: 14,
-        fontWeight: '700',
+    topicBlock: {
+        gap: spacing.sm,
     },
     topicList: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: spacing.sm,
     },
     topicPill: {
-        borderWidth: 1,
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        borderRadius: radius.pill,
-        paddingHorizontal: 10,
+        paddingHorizontal: 11,
         paddingVertical: 6,
+        borderRadius: radius.pill,
+        backgroundColor: palette.indigoSurface,
+        borderWidth: 1,
+        borderColor: palette.indigoBorder,
     },
     topicPillText: {
-        color: colors.primary,
-        fontWeight: '600',
-        fontSize: 12,
-    },
-    emptyText: {
-        color: colors.textMuted,
-        fontSize: 14,
-    },
-    sourceRow: {
-        flexDirection: 'column',
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 14,
-        padding: 10,
-        gap: 10,
-        backgroundColor: colors.surface,
-    },
-    sourceInfo: {
-        flex: 1,
-        gap: 4,
-    },
-    sourceTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: colors.textPrimary,
-    },
-    sourceMeta: {
-        fontSize: 13,
-        color: colors.textMuted,
-    },
-    sourceMetaRow: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    modeChip: {
-        borderRadius: radius.pill,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
+        color: palette.indigo600,
         fontSize: 12,
         fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        overflow: 'hidden',
     },
-    metricChip: {
-        borderRadius: radius.pill,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        overflow: 'hidden',
-    },
-    sourceActions: {
+    modeCard: {
         flexDirection: 'row',
         alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 10,
+        gap: spacing.md,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.cardBg,
     },
-    actionPrimaryLink: {
-        borderRadius: radius.sm,
-        backgroundColor: colors.primary,
-        color: colors.surface,
+    modeCardActive: {
+        borderColor: palette.indigo500,
+        backgroundColor: palette.indigoSurface,
+    },
+    modeIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: radius.md,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: palette.pageBg,
+    },
+    modeIconActive: {
+        backgroundColor: palette.indigo600,
+    },
+    modeTextBlock: {
+        flex: 1,
+    },
+    modeTitle: {
         fontSize: 14,
         fontWeight: '700',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        overflow: 'hidden',
+        color: palette.textPrimary,
     },
-    actionSecondaryLink: {
-        borderRadius: radius.sm,
-        backgroundColor: colors.primarySurface,
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: '700',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        overflow: 'hidden',
+    modeDescription: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        marginTop: 2,
+        lineHeight: 16,
     },
-    actionDangerButton: {
-        borderRadius: radius.sm,
+    expectedBox: {
+        borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: colors.error,
-        backgroundColor: colors.errorSurface,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.pageBg,
+        padding: spacing.md,
+        gap: spacing.xs,
     },
-    actionDangerPressed: {
-        backgroundColor: colors.errorSurface,
-    },
-    actionDangerText: {
-        color: colors.error,
+    expectedTitle: {
         fontSize: 13,
         fontWeight: '700',
+        color: palette.textPrimary,
+    },
+    expectedText: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        lineHeight: 17,
+    },
+    breakdownBox: {
+        gap: spacing.xs,
+    },
+    breakdownRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+    },
+    breakdownName: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        flex: 1,
+    },
+    breakdownCount: {
+        ...uiType.small,
+        color: palette.textMuted,
+        fontWeight: '600',
+    },
+    submitButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: spacing.sm,
+        marginTop: spacing.sm,
+        paddingVertical: 13,
+        borderRadius: radius.pill,
+        backgroundColor: palette.indigo600,
+    },
+    submitButtonText: {
+        color: palette.onDarkPrimary,
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    pressed: {
+        opacity: 0.75,
+    },
+    disabled: {
+        opacity: 0.55,
+    },
+    infoText: {
+        color: palette.emerald500,
+        fontSize: 13,
+        lineHeight: 19,
+    },
+    errorText: {
+        color: palette.error,
+        fontSize: 13,
+        lineHeight: 19,
     },
 });

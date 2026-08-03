@@ -1,37 +1,86 @@
-import { Link } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { Link, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
+} from 'react-native';
+import { AnimatedCard } from '../../src/components/AnimatedCard';
+import { AppHeader } from '../../src/components/AppHeader';
+import { SkeletonCard } from '../../src/components/SkeletonCard';
+import { StatCard } from '../../src/components/StatCard';
 import { TopicAccuracyChart } from '../../src/components/TopicAccuracyChart';
+import { useDashboardStats } from '../../src/hooks/useDashboardStats';
 import { useProgress } from '../../src/hooks/useProgress';
 import { supabase } from '../../src/services/supabase';
-import { AnimatedCard } from '../../src/components/AnimatedCard';
-import { SkeletonCard } from '../../src/components/SkeletonCard';
-import { colors, radius, spacing, typography } from '../../src/theme/tokens';
+import { palette, radius, spacing, uiType } from '../../src/theme/tokens';
+
+function formatRelativeTime(value: string | null): string {
+    if (!value) {
+        return '';
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    const diffMinutes = Math.round((Date.now() - date.getTime()) / 60000);
+
+    if (diffMinutes < 1) {
+        return 'az önce';
+    }
+    if (diffMinutes < 60) {
+        return `${diffMinutes} dk önce`;
+    }
+    if (diffMinutes < 60 * 24) {
+        return `${Math.round(diffMinutes / 60)} sa önce`;
+    }
+
+    return `${Math.round(diffMinutes / (60 * 24))} gün önce`;
+}
 
 export default function DashboardScreen() {
     const {
         progressByTopic,
-        belowTargetTopics,
         todayPriorityTopics,
         isLoading,
         isRefreshing,
-        lastUpdatedAt,
         error,
         refresh,
     } = useProgress();
+
+    const {
+        sourceCount,
+        answeredCount,
+        overallAccuracy,
+        streakDays,
+        recentActivity,
+        isLoading: isStatsLoading,
+        error: statsError,
+        refresh: refreshStats,
+    } = useDashboardStats();
+
     const [sourceIdByTopicId, setSourceIdByTopicId] = useState<Record<string, string>>({});
+    const [signOutError, setSignOutError] = useState<string | null>(null);
 
-    const topicIds = useMemo(() => {
-        const ids = new Set<string>();
-        for (const item of belowTargetTopics) {
-            ids.add(item.topicId);
-        }
-        for (const item of todayPriorityTopics) {
-            ids.add(item.topicId);
-        }
+    // Kart metni "adaptif ogrenme algoritmasi uyarinca" diyor; bu yuzden
+    // adaptiveEngine'in agirlikladigi siralamayi kullaniyoruz. %80 ve uzeri
+    // konular oneri listesinden dusuyor, aksi halde ustalasilmis konular da
+    // "tekrar et" diye gosterilirdi.
+    const suggestedTopics = useMemo(
+        () => todayPriorityTopics.filter((item) => item.accuracy < 80).slice(0, 5),
+        [todayPriorityTopics]
+    );
 
-        return Array.from(ids);
-    }, [belowTargetTopics, todayPriorityTopics]);
+    const topicIds = useMemo(
+        () => suggestedTopics.map((item) => item.topicId),
+        [suggestedTopics]
+    );
 
     useEffect(() => {
         if (topicIds.length === 0) {
@@ -40,6 +89,7 @@ export default function DashboardScreen() {
         }
 
         let cancelled = false;
+
         const loadTopicSources = async () => {
             const { data, error: topicError } = await supabase
                 .from('topics')
@@ -65,253 +115,363 @@ export default function DashboardScreen() {
         };
     }, [topicIds]);
 
-    const handleSignOut = async () => {
-        await supabase.auth.signOut();
-    };
+    const handleRefresh = useCallback(() => {
+        void refresh(true);
+        void refreshStats();
+    }, [refresh, refreshStats]);
 
-    const statusText = isLoading
-        ? 'Veriler yukleniyor...'
-        : isRefreshing
-            ? 'Canli guncelleme aliniyor...'
-            : lastUpdatedAt
-                ? `Son guncelleme: ${lastUpdatedAt.toLocaleTimeString()}`
-                : 'Hazir';
+    // Sekmeye her donuste veri tazelensin; kullanicidan elle yenilemesini
+    // beklemek yerine ekrana girmek yenileme sinyali sayiliyor.
+    useFocusEffect(
+        useCallback(() => {
+            handleRefresh();
+        }, [handleRefresh])
+    );
+
+    const handleSignOut = useCallback(async () => {
+        setSignOutError(null);
+
+        const { error: signOutError } = await supabase.auth.signOut();
+
+        if (signOutError) {
+            setSignOutError(signOutError.message);
+        }
+    }, []);
+
+    const busy = isLoading || isStatsLoading;
+    const combinedError = error ?? statsError;
 
     return (
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-            <View style={styles.heroCard}>
-                <View style={styles.heroTopRow}>
-                    <View style={styles.heroIconWrap}>
-                        <Text style={styles.heroIconText}>D</Text>
-                    </View>
-                    <Text style={styles.heroBadge}>Performans Merkezi</Text>
+        <View style={styles.screen}>
+            <AppHeader />
+
+            <ScrollView
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={handleRefresh}
+                        tintColor={palette.indigo600}
+                        colors={[palette.indigo600]}
+                    />
+                }
+            >
+                <View style={styles.pageHead}>
+                    <Text style={styles.pageTitle}>Performans ve Analiz Paneli</Text>
+                    <Text style={styles.pageSubtitle}>
+                        Öğrenme istatistiklerin, konu ustalık seviyelerin ve AI önerileri
+                    </Text>
                 </View>
-                <Text style={styles.title}>Ilerlemeni Akilli Takip Et</Text>
-                <Text style={styles.description}>
-                    Konu bazli basari yuzdeleri, zayif alanlar ve bugunun oncelikleri.
-                </Text>
-            </View>
 
-            <View style={styles.statusBadge}>
-                <Text style={styles.statusText}>{statusText}</Text>
-            </View>
+                {combinedError ? <Text style={styles.errorText}>{combinedError}</Text> : null}
 
-            <Pressable
-                style={({ pressed }) => [styles.refreshButton, pressed ? styles.refreshButtonPressed : null]}
-                onPress={() => void refresh()}
-            >
-                <Text style={styles.refreshGlyph}>R</Text>
-                <Text style={styles.refreshButtonText}>Veriyi Yenile</Text>
-            </Pressable>
-
-            {isLoading ? <SkeletonCard height={86} /> : null}
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            <AnimatedCard style={styles.chartWrap} delayMs={10} resetKey="topic-chart">
-                <TopicAccuracyChart
-                    items={progressByTopic.map((item) => ({
-                        topicName: item.topicName,
-                        accuracy: item.accuracy,
-                    }))}
-                />
-            </AnimatedCard>
-
-            <AnimatedCard style={styles.card} delayMs={30} resetKey="below-target">
-                <Text style={styles.cardTitle}>%80 Alti Konular</Text>
-                {belowTargetTopics.length === 0 ? (
-                    <Text style={styles.description}>Harika gidiyorsun, tum konular hedefin uzerinde ✨</Text>
+                {busy ? (
+                    <SkeletonCard />
                 ) : (
-                    belowTargetTopics.map((item) => (
-                        <View key={item.topicId} style={styles.topicRow}>
-                            <Text style={styles.listItem}>
-                                {item.topicName}: %{item.accuracy.toFixed(1)} ({item.correctAttempts}/
-                                {item.totalAttempts})
-                            </Text>
-                            {sourceIdByTopicId[item.topicId] ? (
-                                <Link
-                                    href={`/quiz/${sourceIdByTopicId[item.topicId]}`}
-                                    style={styles.inlineLink}
-                                >
-                                    Teste Git
-                                </Link>
-                            ) : null}
+                    <>
+                        <View style={styles.statGrid}>
+                            <StatCard
+                                label="İşlenen Kaynak"
+                                value={String(sourceCount)}
+                                icon="book-outline"
+                                tone="indigo"
+                            />
+                            <StatCard
+                                label="Çözülen Soru"
+                                value={String(answeredCount)}
+                                icon="checkmark-circle-outline"
+                                tone="emerald"
+                            />
                         </View>
-                    ))
-                )}
-            </AnimatedCard>
 
-            <AnimatedCard style={styles.card} delayMs={50} resetKey="priority-topics">
-                <Text style={styles.cardTitle}>Bugun Oncelikli Konular</Text>
-                {todayPriorityTopics.length === 0 ? (
-                    <Text style={styles.description}>Bugun icin oncelik yok, biraz soru cozerek baslayabilirsin ✨</Text>
-                ) : (
-                    todayPriorityTopics.map((item, index) => (
-                        <View key={item.topicId} style={styles.topicRow}>
-                            <Text style={styles.listItem}>
-                                {index + 1}. {item.topicName} (%{item.accuracy.toFixed(1)})
-                            </Text>
-                            {sourceIdByTopicId[item.topicId] ? (
-                                <Link
-                                    href={`/quiz/${sourceIdByTopicId[item.topicId]}`}
-                                    style={styles.inlineLink}
-                                >
-                                    Teste Git
-                                </Link>
-                            ) : null}
+                        <View style={styles.statGrid}>
+                            <StatCard
+                                label="Genel Başarı"
+                                value={`%${overallAccuracy}`}
+                                icon="trending-up-outline"
+                                tone="indigo"
+                                tintValue
+                            />
+                            <StatCard
+                                label="Çalışma Serisi"
+                                value={streakDays > 0 ? `${streakDays} Gün 🔥` : '—'}
+                                icon="ribbon-outline"
+                                tone="amber"
+                                tintValue
+                            />
                         </View>
-                    ))
-                )}
-            </AnimatedCard>
 
-            <Pressable
-                style={({ pressed }) => [styles.button, pressed ? styles.buttonPressed : null]}
-                onPress={handleSignOut}
-            >
-                <Text style={styles.buttonText}>Cikis Yap</Text>
-            </Pressable>
-        </ScrollView>
+                        <AnimatedCard delayMs={10} resetKey="topic-chart">
+                            <TopicAccuracyChart
+                                items={progressByTopic.map((item) => ({
+                                    topicName: item.topicName,
+                                    accuracy: item.accuracy,
+                                }))}
+                            />
+                        </AnimatedCard>
+
+                        <AnimatedCard style={styles.card} delayMs={20} resetKey="ai-suggestions">
+                            <View style={styles.cardHeadRow}>
+                                <Ionicons name="disc-outline" size={18} color={palette.indigo600} />
+                                <Text style={styles.cardTitle}>AI Çalışma Önerileri</Text>
+                            </View>
+                            <Text style={styles.cardDescription}>
+                                Adaptif öğrenme algoritması uyarınca öncelikli tekrar etmen
+                                gereken konular:
+                            </Text>
+
+                            {suggestedTopics.length === 0 ? (
+                                <Text style={styles.emptyText}>
+                                    Şu an %80 altında konun yok. Seriyi bozma!
+                                </Text>
+                            ) : (
+                                suggestedTopics.map((item) => {
+                                    const sourceId = sourceIdByTopicId[item.topicId];
+
+                                    return (
+                                        <View key={item.topicId} style={styles.suggestionRow}>
+                                            <View style={styles.suggestionText}>
+                                                <Text style={styles.suggestionTitle} numberOfLines={1}>
+                                                    {item.topicName}
+                                                </Text>
+                                                <Text style={styles.suggestionMeta}>
+                                                    Ustalık: %{item.accuracy.toFixed(0)}
+                                                </Text>
+                                            </View>
+
+                                            {sourceId ? (
+                                                <Link href={`/quiz/${sourceId}`} asChild>
+                                                    <Pressable style={styles.practiceButton}>
+                                                        <Text style={styles.practiceButtonText}>
+                                                            Pratik Et
+                                                        </Text>
+                                                        <Ionicons
+                                                            name="arrow-forward"
+                                                            size={13}
+                                                            color={palette.onDarkPrimary}
+                                                        />
+                                                    </Pressable>
+                                                </Link>
+                                            ) : null}
+                                        </View>
+                                    );
+                                })
+                            )}
+
+                            <Text style={styles.cardFootnote}>
+                                Aralıklı Tekrar (Spaced Repetition) motoru aktif
+                            </Text>
+                        </AnimatedCard>
+
+                        <AnimatedCard style={styles.card} delayMs={30} resetKey="recent-activity">
+                            <Text style={styles.cardTitle}>Son Test Etkinlikleri</Text>
+
+                            {recentActivity.length === 0 ? (
+                                <Text style={styles.emptyText}>
+                                    Henüz tamamlanan test bulunmuyor. &apos;Test Çöz&apos;
+                                    sekmesinden ilk testini tamamlayabilirsin.
+                                </Text>
+                            ) : (
+                                recentActivity.map((item) => (
+                                    <View key={item.logId} style={styles.activityRow}>
+                                        <View
+                                            style={[
+                                                styles.activityIcon,
+                                                {
+                                                    backgroundColor: item.isCorrect
+                                                        ? palette.emeraldSurface
+                                                        : '#fef2f2',
+                                                },
+                                            ]}
+                                        >
+                                            <Ionicons
+                                                name={item.isCorrect ? 'checkmark' : 'close'}
+                                                size={15}
+                                                color={
+                                                    item.isCorrect
+                                                        ? palette.emerald500
+                                                        : palette.error
+                                                }
+                                            />
+                                        </View>
+
+                                        <Text style={styles.activityTopic} numberOfLines={1}>
+                                            {item.topicName}
+                                        </Text>
+
+                                        <Text style={styles.activityTime}>
+                                            {formatRelativeTime(item.answeredAt)}
+                                        </Text>
+                                    </View>
+                                ))
+                            )}
+                        </AnimatedCard>
+                    </>
+                )}
+
+                <Pressable
+                    style={({ pressed }) => [
+                        styles.signOutButton,
+                        pressed ? styles.pressed : null,
+                    ]}
+                    onPress={handleSignOut}
+                >
+                    <Ionicons name="log-out-outline" size={15} color={palette.error} />
+                    <Text style={styles.signOutText}>Çıkış Yap</Text>
+                </Pressable>
+
+                {signOutError ? <Text style={styles.errorText}>{signOutError}</Text> : null}
+            </ScrollView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+        backgroundColor: palette.pageBg,
+    },
     container: {
         padding: spacing.lg,
-        paddingBottom: 36,
         gap: spacing.md,
-        backgroundColor: colors.background,
+        paddingBottom: spacing.xl,
     },
-    heroCard: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.xl,
-        padding: 16,
-        gap: spacing.sm,
-        backgroundColor: colors.surface,
+    pageHead: {
+        marginBottom: spacing.xs,
     },
-    heroTopRow: {
+    pageTitle: {
+        ...uiType.pageTitle,
+        color: palette.textPrimary,
+    },
+    pageSubtitle: {
+        ...uiType.body,
+        color: palette.textSecondary,
+        marginTop: spacing.xs,
+    },
+    statGrid: {
         flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    heroIconWrap: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.primarySurface,
-    },
-    heroIconText: {
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    heroBadge: {
-        color: colors.primary,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    title: {
-        ...typography.title,
-        color: colors.textPrimary,
-    },
-    chartWrap: {
-        borderRadius: 16,
-        overflow: 'hidden',
+        gap: spacing.md,
     },
     card: {
-        borderWidth: 1,
-        borderColor: colors.border,
+        backgroundColor: palette.cardBg,
         borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
         padding: spacing.md,
         gap: spacing.sm,
-        backgroundColor: colors.surface,
     },
-    cardTitle: {
-        ...typography.heading,
-        color: colors.textPrimary,
-    },
-    description: {
-        fontSize: 16,
-        color: colors.textSecondary,
-        lineHeight: 24,
-    },
-    listItem: {
-        fontSize: 14,
-        lineHeight: 22,
-        color: colors.textPrimary,
-    },
-    topicRow: {
-        gap: 4,
-    },
-    inlineLink: {
-        alignSelf: 'flex-start',
-        borderRadius: radius.sm,
-        backgroundColor: colors.primary,
-        color: colors.surface,
-        fontSize: 12,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        overflow: 'hidden',
-    },
-    refreshButton: {
-        backgroundColor: colors.surface,
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radius.md,
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        alignSelf: 'flex-start',
+    cardHeadRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: spacing.sm,
     },
-    refreshButtonText: {
-        color: colors.textPrimary,
-        fontWeight: '700',
-        fontSize: 14,
+    cardTitle: {
+        ...uiType.cardTitle,
+        color: palette.textPrimary,
     },
-    refreshButtonPressed: {
-        backgroundColor: colors.primarySurface,
+    cardDescription: {
+        ...uiType.body,
+        color: palette.textSecondary,
     },
-    refreshGlyph: {
-        color: colors.textMuted,
-        fontSize: 12,
-        fontWeight: '700',
+    cardFootnote: {
+        ...uiType.small,
+        color: palette.textMuted,
+        textAlign: 'center',
+        marginTop: spacing.sm,
     },
-    statusBadge: {
-        alignSelf: 'flex-start',
+    suggestionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+        paddingVertical: spacing.md,
+        paddingHorizontal: spacing.md,
+        borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: colors.primaryLight,
-        backgroundColor: colors.primarySurface,
-        borderRadius: radius.pill,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.pageBg,
     },
-    statusText: {
-        color: colors.primary,
+    suggestionText: {
+        flex: 1,
+    },
+    suggestionTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: palette.textPrimary,
+    },
+    suggestionMeta: {
+        ...uiType.small,
+        color: palette.amber600,
+        marginTop: 2,
+        fontWeight: '600',
+    },
+    practiceButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+        backgroundColor: palette.indigo600,
+        paddingVertical: 7,
+        paddingHorizontal: 12,
+        borderRadius: radius.sm,
+    },
+    practiceButtonText: {
+        color: palette.onDarkPrimary,
         fontSize: 12,
         fontWeight: '700',
+    },
+    activityRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingVertical: spacing.sm,
+        borderBottomWidth: 1,
+        borderBottomColor: palette.cardBorder,
+    },
+    activityIcon: {
+        width: 28,
+        height: 28,
+        borderRadius: radius.sm,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    activityTopic: {
+        flex: 1,
+        ...uiType.body,
+        color: palette.textPrimary,
+    },
+    activityTime: {
+        ...uiType.small,
+        color: palette.textMuted,
+    },
+    emptyText: {
+        ...uiType.body,
+        color: palette.textMuted,
+        textAlign: 'center',
+        paddingVertical: spacing.md,
+    },
+    signOutButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: spacing.sm,
+        marginTop: spacing.sm,
+        paddingVertical: 11,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.cardBg,
+    },
+    signOutText: {
+        color: palette.error,
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    pressed: {
+        opacity: 0.7,
     },
     errorText: {
-        color: colors.error,
+        color: palette.error,
         fontSize: 14,
-    },
-    button: {
-        marginTop: 8,
-        backgroundColor: colors.primarySurface,
-        borderRadius: radius.md,
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        alignSelf: 'flex-start',
-    },
-    buttonText: {
-        color: colors.primary,
-        fontSize: 14,
-        fontWeight: '700',
-    },
-    buttonPressed: {
-        backgroundColor: colors.border,
     },
 });

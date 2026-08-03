@@ -24,6 +24,22 @@ interface GenerateForTopicOptions {
 
 const MAX_SOURCE_CONTEXT_CHARS = 9000;
 const PREFETCH_QUEUE_LIMIT = 2;
+// Konudaki hazir sorularin tamami dolasilabilsin diye havuz genis tutuluyor.
+const STORED_QUESTION_POOL_LIMIT = 500;
+
+/**
+ * Sorunun nereden geldigi.
+ * - 'bank': kaynak metinden cikarilmis, gercek soru
+ * - 'ai'  : konudaki hazir sorular bitince AI'in urettigi yeni soru
+ */
+export type QuestionOrigin = 'bank' | 'ai';
+
+interface PreparedQuestion {
+    question: GeneratedQuestion;
+    /** Bankadan geldiyse satir kimligi, uretildiyse null. */
+    questionId: string | null;
+    origin: QuestionOrigin;
+}
 
 function getQueueKey(topicId: string, difficulty: number): string {
     return `${topicId}:${difficulty}`;
@@ -110,6 +126,7 @@ export function useQuiz(sourceId?: string) {
     const [topics, setTopics] = useState<Topic[]>([]);
     const [currentQuestion, setCurrentQuestion] = useState<GeneratedQuestion | null>(null);
     const [currentQuestionId, setCurrentQuestionId] = useState<string | null>(null);
+    const [questionOrigin, setQuestionOrigin] = useState<QuestionOrigin | null>(null);
     const [activeTopic, setActiveTopic] = useState<Topic | null>(null);
     const [answerFeedback, setAnswerFeedback] = useState<AnswerFeedback | null>(null);
     const [questionStartedAt, setQuestionStartedAt] = useState<number | null>(null);
@@ -122,7 +139,7 @@ export function useQuiz(sourceId?: string) {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const prefetchedQuestionsRef = useRef<Map<string, GeneratedQuestion[]>>(new Map());
+    const prefetchedQuestionsRef = useRef<Map<string, PreparedQuestion[]>>(new Map());
     const prefetchInFlightRef = useRef<Set<string>>(new Set());
     const askedQuestionIdsRef = useRef<Set<string>>(new Set());
 
@@ -289,7 +306,7 @@ export function useQuiz(sourceId?: string) {
                 .select('*')
                 .eq('topic_id', topicId)
                 .order('created_at', { ascending: false })
-                .limit(50);
+                .limit(STORED_QUESTION_POOL_LIMIT);
 
             if (queryError) {
                 return null;
@@ -300,16 +317,18 @@ export function useQuiz(sourceId?: string) {
                 return null;
             }
 
+            // Gorulmemis soru kalmadiysa null donuyoruz; cagiran taraf boylece
+            // AI uretimine geciyor. Onceden burada gorulmus sorular yeniden
+            // havuza aliniyordu, bu yuzden konu bitmis olsa bile uretim asamasi
+            // hic baslamiyor, ayni sorular donup duruyordu.
             const unseen = rows.filter((row) => !askedQuestionIdsRef.current.has(row.id));
-            const pool = unseen.length > 0 ? unseen : rows;
-            const picked = pool[Math.floor(Math.random() * pool.length)] ?? null;
-
-            if (!picked) {
+            if (unseen.length === 0) {
                 return null;
             }
 
-            if (unseen.length === 0) {
-                askedQuestionIdsRef.current.clear();
+            const picked = unseen[Math.floor(Math.random() * unseen.length)] ?? null;
+            if (!picked) {
+                return null;
             }
 
             askedQuestionIdsRef.current.add(picked.id);
@@ -336,7 +355,23 @@ export function useQuiz(sourceId?: string) {
 
             prefetchInFlightRef.current.add(queueKey);
             try {
-                const nextQuestion = await requestQuestionForTopic(topic, difficulty);
+                // ONCE BANKA, SONRA URETIM. Burasi eskiden kosulsuz uretim
+                // cagiriyordu; kuyruk `generateForTopic`'ten once tuketildigi
+                // icin kaynaktaki gercek sorular bitmeden AI sorulari araya
+                // giriyordu.
+                const storedRow = await pickStoredQuestionForTopic(topic.id);
+                const nextQuestion: PreparedQuestion = storedRow
+                    ? {
+                          question: mapQuestionRowToGeneratedQuestion(storedRow),
+                          questionId: storedRow.id,
+                          origin: 'bank',
+                      }
+                    : {
+                          question: await requestQuestionForTopic(topic, difficulty),
+                          questionId: null,
+                          origin: 'ai',
+                      };
+
                 const updatedQueue = prefetchedQuestionsRef.current.get(queueKey) ?? [];
 
                 if (updatedQueue.length < PREFETCH_QUEUE_LIMIT) {
@@ -350,7 +385,12 @@ export function useQuiz(sourceId?: string) {
                 prefetchInFlightRef.current.delete(queueKey);
             }
         },
-        [requestQuestionForTopic, source, updatePrefetchedCount]
+        [
+            pickStoredQuestionForTopic,
+            requestQuestionForTopic,
+            source,
+            updatePrefetchedCount,
+        ]
     );
 
     const ensureTopic = useCallback(
@@ -424,11 +464,16 @@ export function useQuiz(sourceId?: string) {
 
                     setActiveTopic(selectedTopic);
                     setActiveDifficulty(difficulty);
-                    setCurrentQuestion(queuedQuestion);
-                    setCurrentQuestionId(null);
+                    setCurrentQuestion(queuedQuestion.question);
+                    setCurrentQuestionId(queuedQuestion.questionId);
+                    setQuestionOrigin(queuedQuestion.origin);
                     setAnswerFeedback(null);
                     setQuestionStartedAt(Date.now());
-                    setGenerationStatus('Hazir soru gosterildi. Siradaki soru arka planda hazirlaniyor...');
+                    setGenerationStatus(
+                        queuedQuestion.origin === 'bank'
+                            ? 'Kaynaktaki soru gosterildi.'
+                            : 'Konudaki sorular bitti; AI yeni soru uretti.'
+                    );
 
                     void prefetchNextQuestion(selectedTopic, difficulty);
                     return;
@@ -441,14 +486,19 @@ export function useQuiz(sourceId?: string) {
                     setActiveDifficulty(difficulty);
                     setCurrentQuestion(mapQuestionRowToGeneratedQuestion(storedQuestion));
                     setCurrentQuestionId(storedQuestion.id);
+                    setQuestionOrigin('bank');
                     setAnswerFeedback(null);
                     setQuestionStartedAt(Date.now());
                     setGenerationStatus('Kaynakta hazir soru bulundu ve gosterildi.');
+
+                    void prefetchNextQuestion(selectedTopic, difficulty);
                     return;
                 }
 
+                // Buraya ancak konudaki hazir sorularin tamami cozuldukten
+                // sonra gelinir.
                 setIsGenerating(true);
-                setGenerationStatus('AI yeni soru uretiyor...');
+                setGenerationStatus('Konudaki sorular bitti. AI yeni soru uretiyor...');
 
                 const generated = await requestQuestionForTopic(selectedTopic, difficulty);
 
@@ -456,9 +506,10 @@ export function useQuiz(sourceId?: string) {
                 setActiveDifficulty(difficulty);
                 setCurrentQuestion(generated);
                 setCurrentQuestionId(null);
+                setQuestionOrigin('ai');
                 setAnswerFeedback(null);
                 setQuestionStartedAt(Date.now());
-                setGenerationStatus('Soru hazirlandi. Siradaki soru arka planda hazirlaniyor...');
+                setGenerationStatus('AI yeni soru uretti. Siradaki soru arka planda hazirlaniyor...');
 
                 void prefetchNextQuestion(selectedTopic, difficulty);
             } catch (generationError) {
@@ -566,6 +617,7 @@ export function useQuiz(sourceId?: string) {
             activeTopic,
             currentQuestion,
             currentQuestionId,
+            questionOrigin,
             prefetchNextQuestion,
             questionStartedAt,
         ]
@@ -577,6 +629,7 @@ export function useQuiz(sourceId?: string) {
             topics,
             currentQuestion,
             currentQuestionId,
+            questionOrigin,
             activeTopic,
             answerFeedback,
             recommendedTopicId,
@@ -596,6 +649,7 @@ export function useQuiz(sourceId?: string) {
             topics,
             currentQuestion,
             currentQuestionId,
+            questionOrigin,
             activeTopic,
             answerFeedback,
             recommendedTopicId,

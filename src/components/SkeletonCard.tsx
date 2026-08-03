@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { colors, radius } from '../theme/tokens';
+import { palette, radius } from '../theme/tokens';
 
 interface SkeletonCardProps {
     height?: number;
@@ -44,9 +44,9 @@ export function SkeletonCard({ height = 120, style }: SkeletonCardProps) {
 const styles = StyleSheet.create({
     card: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: palette.cardBorder,
         borderRadius: radius.lg,
-        backgroundColor: colors.surface,
+        backgroundColor: palette.cardBg,
         padding: 14,
         gap: 10,
     },
@@ -54,18 +54,18 @@ const styles = StyleSheet.create({
         width: '78%',
         height: 14,
         borderRadius: radius.sm,
-        backgroundColor: colors.border,
+        backgroundColor: palette.cardBorder,
     },
     lineMedium: {
         width: '64%',
         height: 12,
         borderRadius: radius.sm,
-        backgroundColor: colors.border,
+        backgroundColor: palette.cardBorder,
     },
     lineShort: {
         width: '48%',
         height: 12,
         borderRadius: radius.sm,
-        backgroundColor: colors.border,
+        backgroundColor: palette.cardBorder,
     },
 });

@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { palette, radius, spacing, uiType } from '../theme/tokens';
 
 interface TopicAccuracyItem {
     topicName: string;
@@ -9,75 +10,158 @@ interface TopicAccuracyChartProps {
     items: TopicAccuracyItem[];
 }
 
+const PLOT_HEIGHT = 170;
+const BAR_SLOT_WIDTH = 64;
+const GRID_LINES = [100, 75, 50, 25, 0];
+
 export function TopicAccuracyChart({ items }: TopicAccuracyChartProps) {
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Konu Basari Ozeti</Text>
-            {items.map((item) => (
-                <View key={item.topicName} style={styles.row}>
-                    <View style={styles.topicBlock}>
-                        <View style={styles.topicLine}>
-                            <Text style={styles.topic}>{item.topicName}</Text>
-                            <Text style={styles.accuracy}>%{item.accuracy.toFixed(1)}</Text>
+        <View style={styles.card}>
+            <View style={styles.header}>
+                <Text style={styles.title}>Konu Bazlı Ustalık Dereceleri</Text>
+                <Text style={styles.headerHint}>Başarı Oranı (%)</Text>
+            </View>
+
+            {items.length === 0 ? (
+                <Text style={styles.empty}>
+                    Henüz veri yok. İlk testini çözdüğünde buraya konu bazlı başarı
+                    grafiğin gelecek.
+                </Text>
+            ) : (
+                <View style={styles.plotRow}>
+                    {/* Y ekseni: sabit, yatay kaydirmaya dahil degil */}
+                    <View style={styles.yAxis}>
+                        {GRID_LINES.map((value) => (
+                            <Text key={value} style={styles.yLabel}>
+                                {value}
+                            </Text>
+                        ))}
+                    </View>
+
+                    <View style={styles.plotArea}>
+                        {/* Izgara cizgileri barlarin arkasinda */}
+                        <View style={styles.gridLayer} pointerEvents="none">
+                            {GRID_LINES.map((value) => (
+                                <View key={value} style={styles.gridLine} />
+                            ))}
                         </View>
-                        <View style={styles.track}>
-                            <View style={[styles.fill, { width: `${Math.min(100, Math.max(0, item.accuracy))}%` }]} />
-                        </View>
+
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.barsRow}
+                        >
+                            {items.map((item) => {
+                                const clamped = Math.min(100, Math.max(0, item.accuracy));
+
+                                return (
+                                    <View key={item.topicName} style={styles.barSlot}>
+                                        <View style={styles.barTrack}>
+                                            <View
+                                                style={[
+                                                    styles.bar,
+                                                    // Sifir dogruluk da gorunur kalsin diye alt sinir
+                                                    { height: Math.max(2, (clamped / 100) * PLOT_HEIGHT) },
+                                                ]}
+                                            />
+                                        </View>
+                                        <Text style={styles.barLabel} numberOfLines={1}>
+                                            {item.topicName}
+                                        </Text>
+                                    </View>
+                                );
+                            })}
+                        </ScrollView>
                     </View>
                 </View>
-            ))}
-            {items.length === 0 && <Text style={styles.empty}>Henuz veri yok.</Text>}
+            )}
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    card: {
+        backgroundColor: palette.cardBg,
+        borderRadius: radius.lg,
         borderWidth: 1,
-        borderColor: '#dbe4f0',
-        borderRadius: 16,
-        padding: 16,
-        gap: 12,
-        backgroundColor: '#ffffff',
+        borderColor: palette.cardBorder,
+        padding: spacing.md,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+        marginBottom: spacing.lg,
     },
     title: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#0f172a',
+        ...uiType.cardTitle,
+        color: palette.textPrimary,
+        flexShrink: 1,
     },
-    row: {
-        gap: 8,
+    headerHint: {
+        ...uiType.small,
+        color: palette.textMuted,
     },
-    topicBlock: {
-        gap: 6,
-    },
-    topicLine: {
+    plotRow: {
         flexDirection: 'row',
+        gap: spacing.sm,
+    },
+    yAxis: {
+        height: PLOT_HEIGHT,
         justifyContent: 'space-between',
+        alignItems: 'flex-end',
+        width: 26,
+    },
+    yLabel: {
+        ...uiType.small,
+        color: palette.textMuted,
+        // Etiketi ilgili izgara cizgisiyle ortalamak icin yariyi yukari al
+        lineHeight: 12,
+        marginTop: -6,
+    },
+    plotArea: {
+        flex: 1,
+        height: PLOT_HEIGHT + 24,
+    },
+    gridLayer: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 0,
+        height: PLOT_HEIGHT,
+        justifyContent: 'space-between',
+    },
+    gridLine: {
+        height: 1,
+        backgroundColor: palette.cardBorder,
+    },
+    barsRow: {
+        alignItems: 'flex-end',
+        gap: spacing.sm,
+    },
+    barSlot: {
+        width: BAR_SLOT_WIDTH,
         alignItems: 'center',
     },
-    topic: {
-        color: '#1f2937',
-        fontSize: 14,
+    barTrack: {
+        height: PLOT_HEIGHT,
+        justifyContent: 'flex-end',
     },
-    accuracy: {
-        color: '#2563eb',
-        fontWeight: '700',
-        fontSize: 14,
+    bar: {
+        width: 26,
+        backgroundColor: palette.indigo600,
+        borderTopLeftRadius: radius.sm,
+        borderTopRightRadius: radius.sm,
     },
-    track: {
-        height: 8,
-        borderRadius: 999,
-        backgroundColor: '#e2e8f0',
-        overflow: 'hidden',
-    },
-    fill: {
-        height: '100%',
-        borderRadius: 999,
-        backgroundColor: '#2563eb',
+    barLabel: {
+        ...uiType.small,
+        color: palette.textMuted,
+        marginTop: spacing.sm,
+        textAlign: 'center',
     },
     empty: {
-        color: '#6b7280',
-        fontSize: 14,
+        ...uiType.body,
+        color: palette.textSecondary,
     },
 });
