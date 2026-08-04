@@ -2,10 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Link } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -16,53 +18,27 @@ import {
 import { AnimatedCard } from '../../src/components/AnimatedCard';
 import { AppHeader } from '../../src/components/AppHeader';
 import { useSources, type IngestMode } from '../../src/hooks/useSources';
-import {
-    extractSourceTextFromFile,
-    extractTopicsFromSource,
-} from '../../src/services/geminiService';
+import { extractSourceTextFromFile } from '../../src/services/geminiService';
 import { gradients, palette, radius, spacing, uiType } from '../../src/theme/tokens';
 
-const MAX_IMPORT_FILE_SIZE_BYTES = 4 * 1024 * 1024;
-const MAX_SUGGESTED_TOPICS = 8;
+// Sinir bilincli olarak dusuk: soru cikarma hattinda zaten en fazla
+// 8 x 10.000 karakter isleniyor (bkz. useSources CONTENT_CHUNK_SIZE /
+// MAX_CONTENT_CHUNKS). Daha buyuk dosya, islenmeyen icerik icin dakikalarca
+// bekletiyor.
+const MAX_IMPORT_FILE_SIZE_MB = 2;
+const MAX_IMPORT_FILE_SIZE_BYTES = MAX_IMPORT_FILE_SIZE_MB * 1024 * 1024;
+// Beklenen soru sayisi tahmininde taban deger; icerikten hic soru kalibi
+// cikarilamazsa en az bu kadar soru hedefleniyor.
+const MIN_EXPECTED_QUESTIONS = 8;
 const MAX_AUTO_EXTRACT_QUESTIONS_TOTAL = 80;
 
 type ImportStatus = 'idle' | 'processing' | 'success' | 'error';
 
-const INGEST_MODE_OPTIONS: Array<{
-    mode: IngestMode;
-    label: string;
-    description: string;
-    icon: keyof typeof Ionicons.glyphMap;
-}> = [
-    {
-        mode: 'hybrid',
-        label: 'Hibrit (Topic + Soru)',
-        description: 'PDF/metinden konu ve soru bankası birlikte otomatik üretilir.',
-        icon: 'sparkles',
-    },
-    {
-        mode: 'questions-only',
-        label: 'Sadece Soru Bankası',
-        description: 'İçerikten doğrudan sorular çıkarılıp test bankasına eklenir.',
-        icon: 'help-circle-outline',
-    },
-    {
-        mode: 'topics-only',
-        label: 'Sadece Topic',
-        description: 'Soru çıkarmadan yalnızca ana konu hiyerarşisi oluşturulur.',
-        icon: 'filter-outline',
-    },
-];
-
-// Su an kullaniciya yalnizca soru bankasi modu gosteriliyor. Diger modlarin
-// kodu (IngestMode tipi, useSources'taki mod isleme, yukaridaki secenekler)
-// bilerek duruyor; ileride geri acilacak. Geri acmak icin bu listeye ilgili
-// mode degerini eklemek yeterli.
-const VISIBLE_INGEST_MODES: IngestMode[] = ['questions-only'];
-
-const VISIBLE_INGEST_MODE_OPTIONS = INGEST_MODE_OPTIONS.filter((item) =>
-    VISIBLE_INGEST_MODES.includes(item.mode)
-);
+// Ekran tek modda calisiyor: dosyadan dogrudan soru bankasi uretiliyor.
+// `IngestMode` tipi ve useSources'taki hybrid/topics-only isleme kodu
+// duruyor; baska bir mod gerekirse createSource'a bu sabiti degistirmek
+// yeterli.
+const INGEST_MODE: IngestMode = 'questions-only';
 
 function estimateQuestionLikeCount(text: string): number {
     const numberedStemCount = text.match(/(?:^|\n)\s*\d{1,3}[.)-]\s+.+/g)?.length ?? 0;
@@ -71,124 +47,34 @@ function estimateQuestionLikeCount(text: string): number {
     return Math.max(numberedStemCount, Math.floor(optionStemCount / 4));
 }
 
-function normalizeTopicCandidate(value: string): string {
-    return value
-        .replace(/^[-*]\s+/, '')
-        .replace(/^\d+[.)\-:\s]+/, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function extractSuggestedTopics(content: string): string[] {
-    const lines = content
-        .split('\n')
-        .map((line) => normalizeTopicCandidate(line))
-        .filter((line) => line.length >= 4 && line.length <= 70);
-
-    const headingCandidates = lines.filter((line) => {
-        const wordCount = line.split(/\s+/).length;
-        if (wordCount < 1 || wordCount > 7) {
-            return false;
-        }
-
-        if (/[.?!]$/.test(line)) {
-            return false;
-        }
-
-        return /^[A-Za-z0-9ÇĞİÖŞÜçğıöşü\s&/+()'-]+$/.test(line);
-    });
-
-    const unique = new Map<string, string>();
-    for (const candidate of headingCandidates) {
-        const key = candidate.toLocaleLowerCase('tr-TR');
-        if (!unique.has(key)) {
-            unique.set(key, candidate);
-        }
-
-        if (unique.size >= MAX_SUGGESTED_TOPICS) {
-            break;
-        }
-    }
-
-    return Array.from(unique.values());
-}
-
 export default function SourcesScreen() {
+    const router = useRouter();
     const { createSource } = useSources();
     const [title, setTitle] = useState('');
     const [contentText, setContentText] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isImportingFile, setIsImportingFile] = useState(false);
-    const [isSuggestingTopics, setIsSuggestingTopics] = useState(false);
-    const [suggestedTopics, setSuggestedTopics] = useState<string[]>([]);
-    const [topicsInfo, setTopicsInfo] = useState<string | null>(null);
     const [importStatus, setImportStatus] = useState<ImportStatus>('idle');
     const [importStatusText, setImportStatusText] = useState<string | null>(null);
     const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
     const [importedCharCount, setImportedCharCount] = useState<number>(0);
     const [formError, setFormError] = useState<string | null>(null);
     const [formInfo, setFormInfo] = useState<string | null>(null);
-    const [ingestMode, setIngestMode] = useState<IngestMode>('questions-only');
     const [lastInsertedQuestionBreakdown, setLastInsertedQuestionBreakdown] = useState<
         Array<{ topicName: string; questionCount: number }>
     >([]);
-    const isQuestionsOnlyMode = ingestMode === 'questions-only';
 
-    const expectedTopicCount =
-        ingestMode === 'questions-only'
-            ? Math.max(1, suggestedTopics.length)
-            : suggestedTopics.length;
+    // Konu adlari kaynak islenirken sunucu tarafinda cikariliyor; bu ekranda
+    // onceden gosterilen konu onerisi adimi kalkti.
     const estimatedQuestionCount = estimateQuestionLikeCount(contentText);
-    const expectedQuestionCount =
-        ingestMode === 'topics-only'
-            ? 0
-            : Math.min(
-                  MAX_AUTO_EXTRACT_QUESTIONS_TOTAL,
-                  Math.max(expectedTopicCount * 6, estimatedQuestionCount)
-              );
-
-    const charCount = contentText.trim().length;
-    const wordCount = contentText.trim() ? contentText.trim().split(/\s+/).length : 0;
-
-    const suggestTopics = async (text: string): Promise<number> => {
-        const fallbackTopics = extractSuggestedTopics(text);
-        const safeText = text.trim();
-
-        if (!safeText) {
-            setSuggestedTopics([]);
-            setTopicsInfo(null);
-            return 0;
-        }
-
-        setIsSuggestingTopics(true);
-        try {
-            const aiTopics = await extractTopicsFromSource({
-                contentText: safeText,
-                maxTopics: MAX_SUGGESTED_TOPICS,
-            });
-
-            if (aiTopics.length > 0) {
-                setSuggestedTopics(aiTopics);
-                setTopicsInfo('Konu önerileri AI ile oluşturuldu.');
-                return aiTopics.length;
-            }
-
-            setSuggestedTopics(fallbackTopics);
-            setTopicsInfo('AI konu önerisi boş döndü. Yerel öneriler gösterildi.');
-            return fallbackTopics.length;
-        } catch {
-            setSuggestedTopics(fallbackTopics);
-            setTopicsInfo('AI konu önerisi alınamadı. Yerel öneriler gösterildi.');
-            return fallbackTopics.length;
-        } finally {
-            setIsSuggestingTopics(false);
-        }
-    };
+    const expectedQuestionCount = Math.min(
+        MAX_AUTO_EXTRACT_QUESTIONS_TOTAL,
+        Math.max(MIN_EXPECTED_QUESTIONS, estimatedQuestionCount)
+    );
 
     const handlePickFile = async () => {
         setFormError(null);
         setFormInfo(null);
-        setTopicsInfo(null);
         setImportStatus('idle');
         setImportStatusText(null);
         setImportedCharCount(0);
@@ -212,9 +98,13 @@ export default function SourcesScreen() {
         const isText = asset.mimeType?.startsWith('text/') || lowerName.endsWith('.txt');
 
         if (asset.size && asset.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+            const sizeMb = (asset.size / (1024 * 1024)).toFixed(1);
             setImportStatus('error');
             setImportStatusText('Dosya boyutu limiti aşıldı.');
-            setFormError('Dosya çok büyük. Lütfen 4MB altında bir dosya seç.');
+            setFormError(
+                `Dosya çok büyük (${sizeMb}MB). En fazla ${MAX_IMPORT_FILE_SIZE_MB}MB yükleyebilirsin; ` +
+                    'daha büyük dosyalarda işlem dakikalarca sürüyor ve fazlası zaten okunmuyor.'
+            );
             return;
         }
 
@@ -230,28 +120,10 @@ export default function SourcesScreen() {
                 setContentText(fileText);
                 setImportedCharCount(fileText.trim().length);
                 setImportStatus('success');
-                if (isQuestionsOnlyMode) {
-                    setSuggestedTopics([]);
-                    setTopicsInfo('Sadece soru bankası modunda konu önerisi adımı atlandı.');
-                    setImportStatusText(
-                        'Metin alındı. İçerik gizli tutuldu, soru hazırlığı arka planda yapılacak.'
-                    );
-                    setFormInfo(
-                        'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
-                    );
-                } else {
-                    setImportStatusText(
-                        'Metin alındı. Konu önerileri arka planda hazırlanıyor...'
-                    );
-                    setFormInfo(
-                        'Metin dosyası okundu. Metin kutusu dolduysa işlem tamam; inceleyip kaydedebilirsin.'
-                    );
-                    void suggestTopics(fileText).then((topicCount) => {
-                        setImportStatusText(
-                            `Metin alındı, ${topicCount} konu önerisi hazırlandı.`
-                        );
-                    });
-                }
+                setImportStatusText('Metin alındı. Soru hazırlığı üretim adımında yapılacak.');
+                setFormInfo(
+                    'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
+                );
             } catch (readError) {
                 setImportStatus('error');
                 setImportStatusText('Metin dosyası okunamadı.');
@@ -291,28 +163,12 @@ export default function SourcesScreen() {
                 setContentText(extractedText);
                 setImportedCharCount(extractedText.trim().length);
                 setImportStatus('success');
-                if (isQuestionsOnlyMode) {
-                    setSuggestedTopics([]);
-                    setTopicsInfo('Sadece soru bankası modunda konu önerisi adımı atlandı.');
-                    setImportStatusText(
-                        'PDF metni çıkarıldı. İçerik gizli tutuldu, soru hazırlığı arka planda yapılacak.'
-                    );
-                    setFormInfo(
-                        'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
-                    );
-                } else {
-                    setImportStatusText(
-                        'PDF metni çıkarıldı. Konu önerileri arka planda hazırlanıyor...'
-                    );
-                    setFormInfo(
-                        'Metin kutusu dolduysa PDF başarıyla işlenmiştir; dilersen düzenleyip kaydedebilirsin.'
-                    );
-                    void suggestTopics(extractedText).then((topicCount) => {
-                        setImportStatusText(
-                            `PDF metni çıkarıldı, ${topicCount} konu önerisi hazırlandı.`
-                        );
-                    });
-                }
+                setImportStatusText(
+                    'PDF metni çıkarıldı. Soru hazırlığı üretim adımında yapılacak.'
+                );
+                setFormInfo(
+                    'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
+                );
             } catch (extractError) {
                 setImportStatus('error');
                 setImportStatusText('PDF işleme başarısız oldu.');
@@ -339,45 +195,30 @@ export default function SourcesScreen() {
             return;
         }
 
-        // Konu onerileri arka planda uretiliyorken kaydedilirse konu listesi bos
-        // gider ve kaynak konusuz/sorusuz kaydedilirdi.
-        if (isSuggestingTopics) {
-            setFormError(
-                'Konu önerileri hâlâ hazırlanıyor. Birkaç saniye bekleyip tekrar dene.'
-            );
-            return;
-        }
-
         if (isImportingFile) {
             setFormError('Dosya hâlâ işleniyor. İşlem bitince kaydedebilirsin.');
             return;
         }
 
         if (!contentText.trim()) {
-            setFormError(
-                isQuestionsOnlyMode
-                    ? 'Sadece soru bankası modunda önce bir dosya seçmelisin.'
-                    : 'Kaynak metni zorunludur.'
-            );
+            setFormError('Soru bankası üretmek için önce bir dosya seçmelisin.');
             return;
         }
 
         setIsSubmitting(true);
         setFormError(null);
         setFormInfo(null);
-        setTopicsInfo(null);
         setLastInsertedQuestionBreakdown([]);
 
         try {
             const result = await createSource({
                 title: title.trim(),
                 contentText: contentText.trim(),
-                topicNames: suggestedTopics,
-                ingestMode,
+                topicNames: [],
+                ingestMode: INGEST_MODE,
             });
             setTitle('');
             setContentText('');
-            setSuggestedTopics([]);
 
             if (result.warning) {
                 setFormError(result.warning);
@@ -398,31 +239,10 @@ export default function SourcesScreen() {
                     ? ` ${result.skippedUngroundedQuestionCount} soru kaynak metinde bulunamadığı için elendi.`
                     : '';
 
-            if (result.appliedIngestMode === 'topics-only') {
-                setFormInfo(
-                    `Kaynak başarıyla kaydedildi. Sadece topic modu tamamlandı: ${result.insertedTopicCount} topic eklendi.`
-                );
-                setLastInsertedQuestionBreakdown([]);
-                return;
-            }
-
-            if (result.appliedIngestMode === 'questions-only') {
-                setFormInfo(
-                    `Kaynak başarıyla kaydedildi. Sadece soru bankası modu tamamlandı: ${result.insertedQuestionCount} soru eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
-                );
-                setLastInsertedQuestionBreakdown(result.insertedQuestionCountByTopic);
-                return;
-            }
-
-            if (result.insertedTopicCount > 0 || result.insertedQuestionCount > 0) {
-                setFormInfo(
-                    `Kaynak başarıyla kaydedildi. Hibrit mod tamamlandı: ${result.insertedTopicCount} topic, ${result.insertedQuestionCount} soru eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
-                );
-                setLastInsertedQuestionBreakdown(result.insertedQuestionCountByTopic);
-                return;
-            }
-
-            setFormInfo('Kaynak başarıyla kaydedildi.');
+            setFormInfo(
+                `Kaynak kaydedildi: ${result.insertedQuestionCount} soru, ${result.insertedTopicCount} konu eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
+            );
+            setLastInsertedQuestionBreakdown(result.insertedQuestionCountByTopic);
         } catch (createError) {
             setFormError(
                 createError instanceof Error ? createError.message : 'Kaynak kaydedilemedi.'
@@ -433,13 +253,20 @@ export default function SourcesScreen() {
     };
 
     return (
-        <View style={styles.screen}>
+        // Baslik kutusuna yazarken klavye alani kapatmasin diye icerik
+        // klavye yuksekligi kadar yukari itiliyor.
+        <KeyboardAvoidingView
+            style={styles.screen}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
             <AppHeader />
 
             <ScrollView
                 contentContainerStyle={styles.container}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                automaticallyAdjustKeyboardInsets
             >
                 <LinearGradient
                     colors={gradients.hero}
@@ -450,15 +277,13 @@ export default function SourcesScreen() {
                     <Text style={styles.heroEyebrow}>AI DESTEKLİ KAYNAK İŞLEME</Text>
                     <Text style={styles.heroTitle}>Kaynağını Akıllı Şekilde İşle</Text>
                     <Text style={styles.heroDescription}>
-                        PDF veya metin yükle, işleme modunu seç; konular ve soru bankası
-                        otomatik üretilsin.
+                        PDF veya metin dosyanı yükle; konular ve soru bankası otomatik
+                        üretilsin.
                     </Text>
                 </LinearGradient>
 
                 <AnimatedCard style={styles.panel} delayMs={20} resetKey="create-source-card">
-                    <Text style={styles.sectionLabel}>
-                        1. BELGE YÜKLE VEYA METİN YAPIŞTIR
-                    </Text>
+                    <Text style={styles.sectionLabel}>1. BELGE YÜKLE</Text>
 
                     <Pressable
                         style={({ pressed }) => [
@@ -502,65 +327,19 @@ export default function SourcesScreen() {
                         style={styles.input}
                     />
 
-                    {!isQuestionsOnlyMode ? (
-                        <>
-                            <View style={styles.fieldLabelRow}>
-                                <Text style={styles.fieldLabel}>KAYNAK İÇERİĞİ</Text>
-                                <Text style={styles.counterText}>
-                                    {charCount} Karakter (~{wordCount} Kelime)
-                                </Text>
-                            </View>
-                            <TextInput
-                                value={contentText}
-                                onChangeText={setContentText}
-                                placeholder="Öğrenmek ve soru bankasına dönüştürmek istediğin ders notlarını buraya yapıştır..."
-                                placeholderTextColor={palette.textMuted}
-                                style={[styles.input, styles.textarea]}
-                                multiline
-                                textAlignVertical="top"
-                            />
-
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.ghostButton,
-                                    pressed ? styles.pressed : null,
-                                ]}
-                                onPress={() => {
-                                    void suggestTopics(contentText);
-                                }}
-                                disabled={
-                                    !contentText.trim() ||
-                                    isSubmitting ||
-                                    isImportingFile ||
-                                    isSuggestingTopics
-                                }
-                            >
-                                <Ionicons
-                                    name="sparkles-outline"
-                                    size={14}
-                                    color={palette.indigo600}
-                                />
-                                <Text style={styles.ghostButtonText}>
-                                    {isSuggestingTopics
-                                        ? 'Konu Önerileri Üretiliyor...'
-                                        : 'Konu Önerilerini Yenile'}
-                                </Text>
-                            </Pressable>
-                        </>
-                    ) : (
-                        <View style={styles.noticeBox}>
-                            <Text style={styles.noticeTitle}>Soru İçeriği Gizli Mod</Text>
-                            <Text style={styles.noticeText}>
-                                Dosya seçildikten sonra soru metni ekranda gösterilmez.
-                            </Text>
-                            <Text style={styles.noticeText}>
-                                Hazır veri:{' '}
-                                {importedCharCount > 0
-                                    ? `${importedCharCount} karakter`
-                                    : '—'}
-                            </Text>
-                        </View>
-                    )}
+                    <View style={styles.readyDataRow}>
+                        <Ionicons
+                            name="document-text-outline"
+                            size={14}
+                            color={palette.textMuted}
+                        />
+                        <Text style={styles.readyDataText}>
+                            Hazır veri:{' '}
+                            {importedCharCount > 0
+                                ? `${importedCharCount} karakter`
+                                : 'henüz dosya seçilmedi'}
+                        </Text>
+                    </View>
 
                     {importStatus !== 'idle' ? (
                         <View
@@ -591,108 +370,17 @@ export default function SourcesScreen() {
                             {importStatusText ? (
                                 <Text style={styles.statusDetail}>{importStatusText}</Text>
                             ) : null}
-                            {isSuggestingTopics ? (
-                                <View style={styles.inlineStatusRow}>
-                                    <ActivityIndicator
-                                        size="small"
-                                        color={palette.indigo600}
-                                    />
-                                    <Text style={styles.statusDetail}>
-                                        Konu önerileri hazırlanıyor...
-                                    </Text>
-                                </View>
-                            ) : null}
                         </View>
                     ) : null}
-
-                    {suggestedTopics.length > 0 && !isQuestionsOnlyMode ? (
-                        <View style={styles.topicBlock}>
-                            <Text style={styles.fieldLabel}>TESPİT EDİLEN KONULAR</Text>
-                            <View style={styles.topicList}>
-                                {suggestedTopics.map((topic) => (
-                                    <View key={topic} style={styles.topicPill}>
-                                        <Text style={styles.topicPillText}>{topic}</Text>
-                                    </View>
-                                ))}
-                            </View>
-                        </View>
-                    ) : null}
-
-                    <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>
-                        2. AI İŞLEME MODU SEÇİMİ
-                    </Text>
-
-                    {VISIBLE_INGEST_MODE_OPTIONS.map((item) => {
-                        const isActive = ingestMode === item.mode;
-
-                        return (
-                            <Pressable
-                                key={item.mode}
-                                onPress={() => setIngestMode(item.mode)}
-                                style={({ pressed }) => [
-                                    styles.modeCard,
-                                    isActive ? styles.modeCardActive : null,
-                                    pressed ? styles.pressed : null,
-                                ]}
-                            >
-                                <View
-                                    style={[
-                                        styles.modeIcon,
-                                        isActive ? styles.modeIconActive : null,
-                                    ]}
-                                >
-                                    <Ionicons
-                                        name={item.icon}
-                                        size={18}
-                                        color={
-                                            isActive
-                                                ? palette.onDarkPrimary
-                                                : palette.textMuted
-                                        }
-                                    />
-                                </View>
-
-                                <View style={styles.modeTextBlock}>
-                                    <Text style={styles.modeTitle}>{item.label}</Text>
-                                    <Text style={styles.modeDescription}>
-                                        {item.description}
-                                    </Text>
-                                </View>
-
-                                {isActive ? (
-                                    <Ionicons
-                                        name="checkmark-circle"
-                                        size={19}
-                                        color={palette.indigo600}
-                                    />
-                                ) : null}
-                            </Pressable>
-                        );
-                    })}
 
                     <View style={styles.expectedBox}>
                         <Text style={styles.expectedTitle}>Beklenen İşlem Özeti</Text>
-                        {ingestMode === 'topics-only' ? (
-                            <Text style={styles.expectedText}>
-                                Tahmini: {expectedTopicCount} topic eklenecek, soru bankası
-                                üretilmeyecek.
-                            </Text>
-                        ) : ingestMode === 'questions-only' ? (
-                            <Text style={styles.expectedText}>
-                                Tahmini: ~{expectedQuestionCount} soru bankaya eklenecek.
-                                {suggestedTopics.length > 0
-                                    ? ` Dağıtım ${suggestedTopics.length} topic üzerinden yapılacak.`
-                                    : ' Topic girilmediyse Genel Soru Bankası topiği açılacak.'}
-                            </Text>
-                        ) : (
-                            <Text style={styles.expectedText}>
-                                Tahmini: {expectedTopicCount} topic ve ~
-                                {expectedQuestionCount} soru oluşturulacak.
-                            </Text>
-                        )}
+                        <Text style={styles.expectedText}>
+                            Tahmini: ~{expectedQuestionCount} soru bankaya eklenecek. Konu
+                            başlıkları içerikten otomatik çıkarılacak.
+                        </Text>
                     </View>
 
-                    {topicsInfo ? <Text style={styles.infoText}>{topicsInfo}</Text> : null}
                     {formInfo ? <Text style={styles.infoText}>{formInfo}</Text> : null}
 
                     {lastInsertedQuestionBreakdown.length > 0 ? (
@@ -720,7 +408,7 @@ export default function SourcesScreen() {
                             isSubmitting ? styles.disabled : null,
                         ]}
                         onPress={handleCreateSource}
-                        disabled={isSubmitting || isSuggestingTopics || isImportingFile}
+                        disabled={isSubmitting || isImportingFile}
                     >
                         {isSubmitting ? (
                             <ActivityIndicator size="small" color={palette.onDarkPrimary} />
@@ -736,24 +424,21 @@ export default function SourcesScreen() {
                         </Text>
                     </Pressable>
 
-                    <Link href="/(tabs)/sources" asChild>
-                        <Pressable
-                            style={({ pressed }) => [
-                                styles.ghostButton,
-                                pressed ? styles.pressed : null,
-                            ]}
-                        >
-                            <Ionicons
-                                name="albums-outline"
-                                size={14}
-                                color={palette.indigo600}
-                            />
-                            <Text style={styles.ghostButtonText}>Kaynak Listesine Git</Text>
-                        </Pressable>
-                    </Link>
+                    {/* Link asChild cocugun `style`ini undefined ile ezdigi icin
+                        buton gorunumunu kaybediyor; router.push kullaniliyor. */}
+                    <Pressable
+                        onPress={() => router.push('/(tabs)/sources')}
+                        style={({ pressed }) => [
+                            styles.ghostButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Ionicons name="albums-outline" size={14} color={palette.indigo600} />
+                        <Text style={styles.ghostButtonText}>Kaynak Listesine Git</Text>
+                    </Pressable>
                 </AnimatedCard>
             </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
     );
 }
 
@@ -800,9 +485,6 @@ const styles = StyleSheet.create({
         ...uiType.statLabel,
         color: palette.textSecondary,
     },
-    sectionLabelSpaced: {
-        marginTop: spacing.md,
-    },
     dropzone: {
         alignItems: 'center',
         gap: spacing.xs,
@@ -839,20 +521,21 @@ const styles = StyleSheet.create({
         marginTop: spacing.xs,
         maxWidth: '100%',
     },
+    readyDataRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingVertical: spacing.xs,
+    },
+    readyDataText: {
+        flex: 1,
+        ...uiType.small,
+        color: palette.textMuted,
+    },
     fieldLabel: {
         ...uiType.statLabel,
         color: palette.textSecondary,
         marginTop: spacing.sm,
-    },
-    fieldLabelRow: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        justifyContent: 'space-between',
-        gap: spacing.sm,
-    },
-    counterText: {
-        ...uiType.small,
-        color: palette.textMuted,
     },
     input: {
         borderWidth: 1,
@@ -863,10 +546,6 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: palette.textPrimary,
         backgroundColor: palette.cardBg,
-    },
-    textarea: {
-        minHeight: 150,
-        paddingTop: spacing.md,
     },
     ghostButton: {
         flexDirection: 'row',
@@ -883,23 +562,6 @@ const styles = StyleSheet.create({
         color: palette.indigo600,
         fontSize: 13,
         fontWeight: '700',
-    },
-    noticeBox: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        backgroundColor: palette.pageBg,
-        padding: spacing.md,
-        gap: spacing.xs,
-    },
-    noticeTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: palette.textPrimary,
-    },
-    noticeText: {
-        ...uiType.small,
-        color: palette.textSecondary,
     },
     statusCard: {
         borderRadius: radius.md,
@@ -934,71 +596,6 @@ const styles = StyleSheet.create({
         ...uiType.small,
         color: palette.textSecondary,
         lineHeight: 17,
-    },
-    inlineStatusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-    },
-    topicBlock: {
-        gap: spacing.sm,
-    },
-    topicList: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: spacing.sm,
-    },
-    topicPill: {
-        paddingHorizontal: 11,
-        paddingVertical: 6,
-        borderRadius: radius.pill,
-        backgroundColor: palette.indigoSurface,
-        borderWidth: 1,
-        borderColor: palette.indigoBorder,
-    },
-    topicPillText: {
-        color: palette.indigo600,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    modeCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.md,
-        padding: spacing.md,
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        backgroundColor: palette.cardBg,
-    },
-    modeCardActive: {
-        borderColor: palette.indigo500,
-        backgroundColor: palette.indigoSurface,
-    },
-    modeIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: radius.md,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: palette.pageBg,
-    },
-    modeIconActive: {
-        backgroundColor: palette.indigo600,
-    },
-    modeTextBlock: {
-        flex: 1,
-    },
-    modeTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: palette.textPrimary,
-    },
-    modeDescription: {
-        ...uiType.small,
-        color: palette.textSecondary,
-        marginTop: 2,
-        lineHeight: 16,
     },
     expectedBox: {
         borderRadius: radius.md,

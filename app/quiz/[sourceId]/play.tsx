@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocalSearchParams } from 'expo-router';
+import { Link, useLocalSearchParams, useRouter } from 'expo-router';
 import {
     ActivityIndicator,
     Pressable,
@@ -16,18 +16,35 @@ import { useQuiz } from '../../../src/hooks/useQuiz';
 import { explainWrongAnswer } from '../../../src/services/geminiService';
 import { palette, radius, spacing, typography } from '../../../src/theme/tokens';
 
-const AUTO_NEXT_DELAY_CORRECT_MS = 1800;
-const AUTO_NEXT_DELAY_WRONG_MS = 3500;
+const DEFAULT_SESSION_QUESTION_COUNT = 5;
+
+function formatElapsed(totalSeconds: number): string {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
 
 export default function QuizPlayScreen() {
-    const { sourceId, topicId, topicName } = useLocalSearchParams<{
+    const router = useRouter();
+    const { sourceId, topicId, topicName, count } = useLocalSearchParams<{
         sourceId: string;
         topicId?: string;
         topicName?: string;
+        count?: string;
     }>();
 
     const initialTopicId = typeof topicId === 'string' ? topicId : undefined;
     const initialTopicName = typeof topicName === 'string' ? topicName.trim() : '';
+
+    // Test uzunlugu = secilen konudaki (ya da tum kaynaktaki) hazir soru
+    // sayisi. Test Coz ekranindan parametre olarak geliyor; ust sinir yok,
+    // amac bankadaki sorularin tamamini cozdurmek.
+    const sessionQuestionCount = useMemo(() => {
+        const parsed = Number(count);
+        return Number.isFinite(parsed) && parsed > 0
+            ? Math.round(parsed)
+            : DEFAULT_SESSION_QUESTION_COUNT;
+    }, [count]);
 
     const {
         source,
@@ -37,27 +54,44 @@ export default function QuizPlayScreen() {
         answerFeedback,
         questionOrigin,
         recommendedTopicId,
-        generationStatus,
-        prefetchedQuestionCount,
-        storedQuestionCount,
         isLoading,
         isGenerating,
         isSubmittingAnswer,
         error,
         generateForTopic,
         submitAnswer,
+        pickTopicWithRemainingBank,
     } = useQuiz(sourceId);
 
-    // Akis adaptif ve acik uclu; sabit bir soru sayisi yok. Bu yuzden
-    // "SORU 3 / 10" gibi bir payda gosterilmiyor, sadece cozulen sayilıyor.
     const [answeredCount, setAnsweredCount] = useState(0);
+    const [correctCount, setCorrectCount] = useState(0);
     const [wrongAnswerExplanation, setWrongAnswerExplanation] = useState<string | null>(null);
     const [isExplaining, setIsExplaining] = useState(false);
-    const [autoAdvanceEnabled, setAutoAdvanceEnabled] = useState(true);
-    const [isAutoAdvancing, setIsAutoAdvancing] = useState(false);
-    const [nextCountdownMs, setNextCountdownMs] = useState<number | null>(null);
     const [bootError, setBootError] = useState<string | null>(null);
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const hasBootstrappedRef = useRef(false);
+
+    const isSessionFinished = answeredCount >= sessionQuestionCount && Boolean(answerFeedback);
+    const currentQuestionNumber = Math.min(
+        sessionQuestionCount,
+        answerFeedback ? answeredCount : answeredCount + 1
+    );
+    const progressRatio = Math.min(1, currentQuestionNumber / sessionQuestionCount);
+
+    // Soru basina gecen sure; her yeni soruda sifirlanir.
+    useEffect(() => {
+        setElapsedSeconds(0);
+
+        if (!currentQuestion || answerFeedback) {
+            return;
+        }
+
+        const timer = setInterval(() => {
+            setElapsedSeconds((previous) => previous + 1);
+        }, 1000);
+
+        return () => clearInterval(timer);
+    }, [currentQuestion, answerFeedback]);
 
     const activeTopicName = useMemo(() => {
         if (activeTopic?.name) {
@@ -100,8 +134,9 @@ export default function QuizPlayScreen() {
                 return;
             }
 
-            if (recommendedTopicId) {
-                await generateForTopic({ topicId: recommendedTopicId });
+            const firstTopicId = pickTopicWithRemainingBank() ?? recommendedTopicId;
+            if (firstTopicId) {
+                await generateForTopic({ topicId: firstTopicId });
                 return;
             }
 
@@ -113,7 +148,15 @@ export default function QuizPlayScreen() {
                     : 'Ilk soru acilirken bir hata olustu.'
             );
         }
-    }, [generateForTopic, initialTopicId, initialTopicName, isGenerating, isLoading, recommendedTopicId]);
+    }, [
+        generateForTopic,
+        initialTopicId,
+        initialTopicName,
+        isGenerating,
+        isLoading,
+        pickTopicWithRemainingBank,
+        recommendedTopicId,
+    ]);
 
     useEffect(() => {
         hasBootstrappedRef.current = false;
@@ -173,14 +216,7 @@ export default function QuizPlayScreen() {
             return;
         }
 
-        setIsAutoAdvancing(false);
-        setNextCountdownMs(null);
         setWrongAnswerExplanation(null);
-
-        if (activeTopic?.id) {
-            await generateForTopic({ topicId: activeTopic.id });
-            return;
-        }
 
         if (initialTopicName) {
             await generateForTopic({ topicName: initialTopicName });
@@ -192,8 +228,14 @@ export default function QuizPlayScreen() {
             return;
         }
 
-        if (recommendedTopicId) {
-            await generateForTopic({ topicId: recommendedTopicId });
+        // "Tum Konular" modu: aktif konuya sabitlenmek yerine bankasinda hala
+        // cozulmemis sorusu olan konuya geciyoruz, boylece kaynaktaki tum
+        // sorular tuketiliyor.
+        const nextTopicId =
+            pickTopicWithRemainingBank() ?? activeTopic?.id ?? recommendedTopicId;
+
+        if (nextTopicId) {
+            await generateForTopic({ topicId: nextTopicId });
             return;
         }
 
@@ -204,39 +246,11 @@ export default function QuizPlayScreen() {
         initialTopicId,
         initialTopicName,
         isGenerating,
+        pickTopicWithRemainingBank,
         recommendedTopicId,
     ]);
 
-    useEffect(() => {
-        if (!answerFeedback || !autoAdvanceEnabled) {
-            setIsAutoAdvancing(false);
-            setNextCountdownMs(null);
-            return;
-        }
-
-        const delayMs = answerFeedback.isCorrect
-            ? AUTO_NEXT_DELAY_CORRECT_MS
-            : AUTO_NEXT_DELAY_WRONG_MS;
-        const deadline = Date.now() + delayMs;
-        setIsAutoAdvancing(true);
-        setNextCountdownMs(delayMs);
-
-        const countdownTimer = setInterval(() => {
-            const remaining = Math.max(0, deadline - Date.now());
-            setNextCountdownMs(remaining);
-        }, 100);
-
-        const autoNextTimer = setTimeout(() => {
-            setIsAutoAdvancing(false);
-            setNextCountdownMs(null);
-            void handleNextQuestion();
-        }, delayMs);
-
-        return () => {
-            clearInterval(countdownTimer);
-            clearTimeout(autoNextTimer);
-        };
-    }, [answerFeedback, autoAdvanceEnabled, handleNextQuestion]);
+    // Otomatik gecis yok: sonraki soruya kullanici tiklayarak geciyor.
 
     if (isLoading) {
         return (
@@ -257,8 +271,8 @@ export default function QuizPlayScreen() {
                 <View style={[styles.card, styles.errorCard]}>
                     <Text style={styles.errorTitle}>Akis acilamadi</Text>
                     <Text style={styles.error}>{error}</Text>
-                    <Link href={`/quiz/${sourceId}`} style={styles.stateLinkButton}>
-                        Konu Secimine Don
+                    <Link href="/(tabs)/quiz" style={styles.stateLinkButton}>
+                        Test Seçimine Dön
                     </Link>
                 </View>
             </ScrollView>
@@ -271,50 +285,60 @@ export default function QuizPlayScreen() {
                 <View style={styles.headerTopRow}>
                     <View style={styles.headerTextBlock}>
                         <Text style={styles.headerEyebrow}>
-                            {/* Geri bildirim ekrandayken hala o soruyu gosteriyoruz */}
-                            SORU {answerFeedback ? answeredCount : answeredCount + 1}
+                            SORU {currentQuestionNumber} / {sessionQuestionCount}
                         </Text>
+                        {/* Konu adi zaten soru kartindaki rozette; burada kaynak. */}
                         <Text style={styles.headerTitle} numberOfLines={1}>
                             {source?.title ?? 'Kaynak'}
                         </Text>
                     </View>
 
-                    <Link href={`/quiz/${sourceId}`} asChild>
-                        <Pressable style={styles.closeButton} hitSlop={8}>
-                            <Text style={styles.closeButtonText}>✕</Text>
+                    <View style={styles.headerActions}>
+                        {currentQuestion && !answerFeedback ? (
+                            <View style={styles.timerChip}>
+                                <Ionicons
+                                    name="time-outline"
+                                    size={13}
+                                    color={palette.textSecondary}
+                                />
+                                <Text style={styles.timerChipText}>
+                                    {formatElapsed(elapsedSeconds)}
+                                </Text>
+                            </View>
+                        ) : null}
+
+                        {/* Link asChild cocugun `style`ini undefined ile
+                            ezdigi icin router.push kullaniliyor. */}
+                        <Pressable
+                            onPress={() => router.push('/(tabs)/quiz')}
+                            style={styles.closeButton}
+                            hitSlop={8}
+                        >
+                            <Ionicons
+                                name="close"
+                                size={17}
+                                color={palette.textSecondary}
+                            />
                         </Pressable>
-                    </Link>
+                    </View>
                 </View>
 
-                <View style={styles.headerChipRow}>
-                    {/* Kaynaktaki sorular bitince AI uretimine geciliyor;
-                        kullanici hangisini cozdugunu bilmeli. */}
-                    {questionOrigin ? (
-                        <Text
-                            style={[
-                                styles.headerChip,
-                                questionOrigin === 'bank'
-                                    ? styles.headerChipBank
-                                    : styles.headerChipAi,
-                            ]}
-                        >
-                            {questionOrigin === 'bank' ? 'Kaynaktan' : 'AI üretti'}
+                {/* Kaynaktaki sorular bitince AI uretimine geciliyor; yalnizca
+                    o durumda rozet gosteriliyor. */}
+                {questionOrigin === 'ai' ? (
+                    <View style={styles.originRow}>
+                        <Text style={[styles.headerChip, styles.headerChipAi]}>
+                            AI üretti
                         </Text>
-                    ) : null}
-                    <Text style={[styles.headerChip, styles.headerChipQueue]}>
-                        Hazırda {prefetchedQuestionCount}
-                    </Text>
-                    <Text style={[styles.headerChip, styles.headerChipBank]}>
-                        Bankada {storedQuestionCount}
-                    </Text>
-                    <Text style={[styles.headerChip, styles.headerChipAuto]}>
-                        Oto geçiş: {autoAdvanceEnabled ? 'Açık' : 'Kapalı'}
-                    </Text>
-                </View>
+                    </View>
+                ) : null}
+            </View>
+
+            <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${progressRatio * 100}%` }]} />
             </View>
 
             {bootError ? <Text style={styles.error}>{bootError}</Text> : null}
-            {generationStatus ? <Text style={styles.generationInfo}>{generationStatus}</Text> : null}
 
             {!currentQuestion && isGenerating ? (
                 <View style={[styles.card, styles.stateCard]}>
@@ -352,8 +376,20 @@ export default function QuizPlayScreen() {
                                 return;
                             }
                             setWrongAnswerExplanation(null);
-                            setAnsweredCount((count) => count + 1);
-                            void submitAnswer(option);
+                            setAnsweredCount((previous) => previous + 1);
+                            const isCorrect =
+                                option.trim().charAt(0).toUpperCase() ===
+                                currentQuestion.dogruCevap.trim().charAt(0).toUpperCase();
+
+                            void submitAnswer(option)
+                                .then(() => {
+                                    if (isCorrect) {
+                                        setCorrectCount((previous) => previous + 1);
+                                    }
+                                })
+                                // Hata durumu useQuiz icinde zaten ekrana
+                                // yansiyor; burada yutulmasi yeterli.
+                                .catch(() => undefined);
                         }}
                     />
                     {isSubmittingAnswer ? <ActivityIndicator size="small" color={palette.indigo600} /> : null}
@@ -478,56 +514,53 @@ export default function QuizPlayScreen() {
                         </View>
                     ) : null}
 
-                    <Text style={styles.autoNextHint}>
-                        {autoAdvanceEnabled
-                            ? answerFeedback.isCorrect
-                                ? 'Sonraki soru otomatik geliyor...'
-                                : 'Sonraki soru kisa sure sonra otomatik gelecek...'
-                            : 'Otomatik gecis kapali. Hazir oldugunda sonraki soruya gecebilirsin.'}
-                    </Text>
-
-                    {autoAdvanceEnabled && isAutoAdvancing && nextCountdownMs !== null ? (
-                        <Text style={styles.countdownText}>
-                            Sonraki soruya gecis: {(nextCountdownMs / 1000).toFixed(1)} sn
-                        </Text>
+                    {isSessionFinished ? (
+                        <View style={styles.summaryBox}>
+                            <Text style={styles.summaryTitle}>Test tamamlandı</Text>
+                            <Text style={styles.summaryText}>
+                                {sessionQuestionCount} sorudan {correctCount} doğru
+                            </Text>
+                        </View>
                     ) : null}
 
-                    {prefetchedQuestionCount > 0 ? (
-                        <Text style={styles.prefetchReadyHint}>
-                            Sonraki sorulardan bazilari hazir, gecis daha hizli olacak.
-                        </Text>
-                    ) : null}
-
-                    <Pressable
-                        onPress={() => {
-                            void handleNextQuestion();
-                        }}
-                        disabled={isGenerating}
-                        style={[styles.secondaryButton, isGenerating ? styles.buttonDisabled : null]}
-                    >
-                        <Text style={styles.secondaryButtonText}>
-                            {isGenerating ? 'Yeni soru uretiliyor...' : 'Sonraki Soru'}
-                        </Text>
-                    </Pressable>
-
-                    <Pressable
-                        onPress={() => {
-                            setAutoAdvanceEnabled((prev) => !prev);
-                            setIsAutoAdvancing(false);
-                            setNextCountdownMs(null);
-                        }}
-                        style={styles.ghostButton}
-                    >
-                        <Text style={styles.ghostButtonText}>
-                            {autoAdvanceEnabled ? 'Otomatik Gecisi Kapat' : 'Otomatik Gecisi Ac'}
-                        </Text>
-                    </Pressable>
+                    {isSessionFinished ? (
+                        <Pressable
+                            onPress={() => router.push('/(tabs)/quiz')}
+                            style={({ pressed }) => [
+                                styles.primaryButton,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Text style={styles.primaryButtonText}>Testi Bitir</Text>
+                        </Pressable>
+                    ) : (
+                        <Pressable
+                            onPress={() => {
+                                void handleNextQuestion();
+                            }}
+                            disabled={isGenerating}
+                            style={({ pressed }) => [
+                                styles.primaryButton,
+                                pressed ? styles.pressed : null,
+                                isGenerating ? styles.buttonDisabled : null,
+                            ]}
+                        >
+                            {isGenerating ? (
+                                <ActivityIndicator size="small" color={palette.onDarkPrimary} />
+                            ) : (
+                                <>
+                                    <Text style={styles.primaryButtonText}>Sonraki Soru</Text>
+                                    <Ionicons
+                                        name="arrow-forward"
+                                        size={16}
+                                        color={palette.onDarkPrimary}
+                                    />
+                                </>
+                            )}
+                        </Pressable>
+                    )}
                 </AnimatedCard>
             ) : null}
-
-            <Link href={`/quiz/${sourceId}`} style={styles.stateLinkButton}>
-                Konu Secimine Don
-            </Link>
         </ScrollView>
     );
 }
@@ -601,17 +634,7 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         overflow: 'hidden',
     },
-    headerChipQueue: {
-        borderColor: palette.indigo500,
-        backgroundColor: palette.indigoSurface,
-        color: palette.indigo600,
-    },
     headerChipBank: {
-        borderColor: palette.indigo500,
-        backgroundColor: palette.indigoSurface,
-        color: palette.indigo600,
-    },
-    headerChipAuto: {
         borderColor: palette.indigo500,
         backgroundColor: palette.indigoSurface,
         color: palette.indigo600,
@@ -635,6 +658,74 @@ const styles = StyleSheet.create({
     },
     pressed: {
         opacity: 0.85,
+    },
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    timerChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingVertical: 5,
+        paddingHorizontal: 9,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.pageBg,
+    },
+    timerChipText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: palette.textSecondary,
+    },
+    originRow: {
+        flexDirection: 'row',
+        marginTop: 8,
+    },
+    progressTrack: {
+        height: 6,
+        borderRadius: radius.pill,
+        backgroundColor: palette.cardBorder,
+        overflow: 'hidden',
+    },
+    progressFill: {
+        height: '100%',
+        borderRadius: radius.pill,
+        backgroundColor: palette.indigo600,
+    },
+    primaryButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: spacing.sm,
+        marginTop: spacing.sm,
+        paddingVertical: 13,
+        borderRadius: radius.pill,
+        backgroundColor: palette.indigo600,
+    },
+    primaryButtonText: {
+        color: palette.onDarkPrimary,
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    summaryBox: {
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.emerald500,
+        backgroundColor: palette.emeraldSurface,
+        padding: spacing.md,
+        gap: 4,
+    },
+    summaryTitle: {
+        fontSize: 15,
+        fontWeight: '800',
+        color: '#065f46',
+    },
+    summaryText: {
+        fontSize: 14,
+        color: palette.textSecondary,
     },
 
     // --- Cozum & aciklama karti ---
@@ -835,35 +926,8 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '700',
     },
-    autoNextHint: {
-        fontSize: 13,
-        color: palette.textSecondary,
-    },
     generationInfo: {
         fontSize: 13,
         color: palette.indigo600,
-    },
-    prefetchReadyHint: {
-        fontSize: 12,
-        color: palette.indigo600,
-    },
-    countdownText: {
-        fontSize: 13,
-        color: palette.indigo600,
-        fontWeight: '700',
-    },
-    ghostButton: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        paddingVertical: 10,
-        alignItems: 'center',
-        marginTop: 4,
-        backgroundColor: palette.indigoSurface,
-    },
-    ghostButtonText: {
-        color: palette.textSecondary,
-        fontSize: 14,
-        fontWeight: '700',
     },
 });

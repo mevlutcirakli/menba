@@ -6,6 +6,13 @@ export type Json =
     | { [key: string]: Json | undefined }
     | Json[];
 
+/**
+ * Konunun kaynagi. 'ingest' = kaynak islenirken otomatik cikarildi,
+ * 'manual' = kullanici "Yeni Konu" akisindan ekledi. Yalnizca 'manual'
+ * konular silinebilir (bkz. migration 0006).
+ */
+export type TopicOrigin = 'ingest' | 'manual';
+
 export interface Database {
     public: {
         Tables: {
@@ -78,12 +85,14 @@ export interface Database {
                     id: string;
                     source_id: string;
                     name: string;
+                    origin: TopicOrigin;
                     created_at: string | null;
                 };
                 Insert: {
                     id?: string;
                     source_id: string;
                     name: string;
+                    origin?: TopicOrigin;
                     created_at?: string;
                 };
                 Update: Partial<Database['public']['Tables']['topics']['Insert']>;

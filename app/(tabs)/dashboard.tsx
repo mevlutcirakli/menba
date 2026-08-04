@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Pressable,
@@ -45,6 +45,7 @@ function formatRelativeTime(value: string | null): string {
 }
 
 export default function DashboardScreen() {
+    const router = useRouter();
     const {
         progressByTopic,
         todayPriorityTopics,
@@ -66,6 +67,9 @@ export default function DashboardScreen() {
     } = useDashboardStats();
 
     const [sourceIdByTopicId, setSourceIdByTopicId] = useState<Record<string, string>>({});
+    const [questionCountByTopicId, setQuestionCountByTopicId] = useState<
+        Record<string, number>
+    >({});
     const [signOutError, setSignOutError] = useState<string | null>(null);
 
     // Kart metni "adaptif ogrenme algoritmasi uyarinca" diyor; bu yuzden
@@ -85,16 +89,22 @@ export default function DashboardScreen() {
     useEffect(() => {
         if (topicIds.length === 0) {
             setSourceIdByTopicId({});
+            setQuestionCountByTopicId({});
             return;
         }
 
         let cancelled = false;
 
         const loadTopicSources = async () => {
-            const { data, error: topicError } = await supabase
-                .from('topics')
-                .select('id, source_id')
-                .in('id', topicIds);
+            const [
+                { data, error: topicError },
+                { data: questionRows },
+            ] = await Promise.all([
+                supabase.from('topics').select('id, source_id').in('id', topicIds),
+                // "Pratik Et" testinin uzunlugu konudaki hazir soru sayisi
+                // kadar; play ekranina parametre olarak gidiyor.
+                supabase.from('questions').select('topic_id').in('topic_id', topicIds),
+            ]);
 
             if (cancelled || topicError || !data) {
                 return;
@@ -105,7 +115,13 @@ export default function DashboardScreen() {
                 next[row.id] = row.source_id;
             }
 
+            const counts: Record<string, number> = {};
+            for (const row of questionRows ?? []) {
+                counts[row.topic_id] = (counts[row.topic_id] ?? 0) + 1;
+            }
+
             setSourceIdByTopicId(next);
+            setQuestionCountByTopicId(counts);
         };
 
         void loadTopicSources();
@@ -241,18 +257,36 @@ export default function DashboardScreen() {
                                             </View>
 
                                             {sourceId ? (
-                                                <Link href={`/quiz/${sourceId}`} asChild>
-                                                    <Pressable style={styles.practiceButton}>
-                                                        <Text style={styles.practiceButtonText}>
-                                                            Pratik Et
-                                                        </Text>
-                                                        <Ionicons
-                                                            name="arrow-forward"
-                                                            size={13}
-                                                            color={palette.onDarkPrimary}
-                                                        />
-                                                    </Pressable>
-                                                </Link>
+                                                // Dogrudan bu konunun testine gir; onceden konu
+                                                // secim ekranina birakiyordu ve onerilen konu
+                                                // kayboluyordu. Link asChild kullanilmiyor:
+                                                // cocugun `style`ini undefined ile eziyor.
+                                                <Pressable
+                                                    onPress={() =>
+                                                        router.push({
+                                                            pathname: '/quiz/[sourceId]/play',
+                                                            params: {
+                                                                sourceId,
+                                                                topicId: item.topicId,
+                                                                count: String(
+                                                                    questionCountByTopicId[
+                                                                        item.topicId
+                                                                    ] ?? 0
+                                                                ),
+                                                            },
+                                                        })
+                                                    }
+                                                    style={styles.practiceButton}
+                                                >
+                                                    <Text style={styles.practiceButtonText}>
+                                                        Pratik Et
+                                                    </Text>
+                                                    <Ionicons
+                                                        name="arrow-forward"
+                                                        size={13}
+                                                        color={palette.onDarkPrimary}
+                                                    />
+                                                </Pressable>
                                             ) : null}
                                         </View>
                                     );

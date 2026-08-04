@@ -17,13 +17,43 @@ import { useSources } from '../../src/hooks/useSources';
 import { supabase } from '../../src/services/supabase';
 import { gradients, palette, radius, spacing, uiType } from '../../src/theme/tokens';
 
+interface TopicOption {
+    id: string;
+    name: string;
+    questionCount: number;
+}
+
+interface SourceStats {
+    topicCount: number;
+    questionCount: number;
+    topics: TopicOption[];
+}
+
 export default function QuizTabScreen() {
     const router = useRouter();
     const { sources, isLoading, error, fetchSources } = useSources();
     const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
-    const [sourceStatsById, setSourceStatsById] = useState<
-        Record<string, { topicCount: number; questionCount: number }>
-    >({});
+    // null = "Tum Konular"
+    const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+    const [sourceStatsById, setSourceStatsById] = useState<Record<string, SourceStats>>({});
+
+    const selectedStats = selectedSourceId ? sourceStatsById[selectedSourceId] : undefined;
+    const topicOptions = selectedStats?.topics ?? [];
+
+    // Soru sayisi secilmiyor: secilen konudaki (ya da "Tum Konular" ise
+    // kaynaktaki) hazir sorularin tamami tek testte cozuluyor.
+    const selectedTopic = selectedTopicId
+        ? topicOptions.find((topic) => topic.id === selectedTopicId)
+        : undefined;
+    const questionCount = selectedTopicId
+        ? selectedTopic?.questionCount ?? 0
+        : selectedStats?.questionCount ?? 0;
+
+    // Kaynak degisince konu filtresi sifirlanir; onceki kaynagin konusu
+    // yeni kaynakta yok.
+    useEffect(() => {
+        setSelectedTopicId(null);
+    }, [selectedSourceId]);
 
     useFocusEffect(
         useCallback(() => {
@@ -53,7 +83,7 @@ export default function QuizTabScreen() {
             const sourceIds = sources.map((source) => source.id);
             const { data: topicRows, error: topicError } = await supabase
                 .from('topics')
-                .select('id, source_id')
+                .select('id, source_id, name')
                 .in('source_id', sourceIds);
 
             if (cancelled || topicError || !topicRows) {
@@ -71,6 +101,7 @@ export default function QuizTabScreen() {
             }
 
             const questionCountBySource = new Map<string, number>();
+            const questionCountByTopicId = new Map<string, number>();
             if (topicRows.length > 0) {
                 const topicIds = topicRows.map((topic) => topic.id);
                 const { data: questionRows } = await supabase
@@ -84,6 +115,11 @@ export default function QuizTabScreen() {
                         continue;
                     }
 
+                    questionCountByTopicId.set(
+                        question.topic_id,
+                        (questionCountByTopicId.get(question.topic_id) ?? 0) + 1
+                    );
+
                     questionCountBySource.set(
                         sourceId,
                         (questionCountBySource.get(sourceId) ?? 0) + 1
@@ -95,14 +131,19 @@ export default function QuizTabScreen() {
                 return;
             }
 
-            const nextStats: Record<
-                string,
-                { topicCount: number; questionCount: number }
-            > = {};
+            const nextStats: Record<string, SourceStats> = {};
             for (const source of sources) {
                 nextStats[source.id] = {
                     topicCount: topicCountBySource.get(source.id) ?? 0,
                     questionCount: questionCountBySource.get(source.id) ?? 0,
+                    topics: topicRows
+                        .filter((topic) => topic.source_id === source.id)
+                        .map((topic) => ({
+                            id: topic.id,
+                            name: topic.name,
+                            questionCount: questionCountByTopicId.get(topic.id) ?? 0,
+                        }))
+                        .sort((a, b) => b.questionCount - a.questionCount),
                 };
             }
 
@@ -211,18 +252,111 @@ export default function QuizTabScreen() {
                         );
                     })}
 
+                    {/* Konu filtresi test baslamadan ONCE burada; secilen
+                        kaynagin konulari dinamik geliyor. */}
+                    {selectedSourceId ? (
+                        <>
+                            <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>
+                                2. KONU FİLTRESİ
+                            </Text>
+
+                            {topicOptions.length === 0 ? (
+                                <Text style={styles.emptyHint}>
+                                    Bu kaynakta henüz konu yok.
+                                </Text>
+                            ) : (
+                                <View style={styles.pillRow}>
+                                    <Pressable
+                                        onPress={() => setSelectedTopicId(null)}
+                                        style={({ pressed }) => [
+                                            styles.pill,
+                                            selectedTopicId === null ? styles.pillActive : null,
+                                            pressed ? styles.pressed : null,
+                                        ]}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.pillText,
+                                                selectedTopicId === null
+                                                    ? styles.pillTextActive
+                                                    : null,
+                                            ]}
+                                        >
+                                            Tüm Konular ·{' '}
+                                            {selectedStats?.questionCount ?? 0} soru
+                                        </Text>
+                                    </Pressable>
+
+                                    {topicOptions.map((topic) => {
+                                        const isActive = selectedTopicId === topic.id;
+
+                                        return (
+                                            <Pressable
+                                                key={topic.id}
+                                                onPress={() => setSelectedTopicId(topic.id)}
+                                                style={({ pressed }) => [
+                                                    styles.pill,
+                                                    isActive ? styles.pillActive : null,
+                                                    pressed ? styles.pressed : null,
+                                                ]}
+                                            >
+                                                <Text
+                                                    style={[
+                                                        styles.pillText,
+                                                        isActive ? styles.pillTextActive : null,
+                                                    ]}
+                                                    numberOfLines={1}
+                                                >
+                                                    {topic.name} · {topic.questionCount} soru
+                                                </Text>
+                                            </Pressable>
+                                        );
+                                    })}
+                                </View>
+                            )}
+
+                            {topicOptions.length > 0 ? (
+                                <View style={styles.summaryBox}>
+                                    <Ionicons
+                                        name="list-outline"
+                                        size={16}
+                                        color={palette.indigo600}
+                                    />
+                                    <Text style={styles.summaryText}>
+                                        {questionCount > 0
+                                            ? `Bu testte ${questionCount} soru çözeceksin.`
+                                            : 'Bu seçimde hazır soru yok.'}
+                                    </Text>
+                                </View>
+                            ) : null}
+                        </>
+                    ) : null}
+
                     {sources.length > 0 ? (
                         <Pressable
                             style={({ pressed }) => [
                                 styles.startButton,
                                 pressed ? styles.pressed : null,
-                                !selectedSourceId ? styles.startButtonDisabled : null,
+                                !selectedSourceId || questionCount === 0
+                                    ? styles.startButtonDisabled
+                                    : null,
                             ]}
-                            disabled={!selectedSourceId}
+                            disabled={!selectedSourceId || questionCount === 0}
                             onPress={() => {
-                                if (selectedSourceId) {
-                                    router.push(`/quiz/${selectedSourceId}`);
+                                if (!selectedSourceId || questionCount === 0) {
+                                    return;
                                 }
+
+                                // Konu ve test ayarlari akisa parametre olarak
+                                // gecer; ic ekranda tekrar secim yok.
+                                router.push({
+                                    pathname: '/quiz/[sourceId]/play',
+                                    params: {
+                                        sourceId: selectedSourceId,
+                                        ...(selectedTopicId ? { topicId: selectedTopicId } : {}),
+                                        count: String(questionCount),
+                                    },
+                                });
                             }}
                         >
                             <Ionicons name="play" size={15} color={palette.onDarkPrimary} />
@@ -278,6 +412,56 @@ const styles = StyleSheet.create({
         ...uiType.statLabel,
         color: palette.textSecondary,
         marginBottom: spacing.xs,
+    },
+    sectionLabelSpaced: {
+        marginTop: spacing.md,
+    },
+    pillRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: spacing.sm,
+    },
+    pill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 9,
+        paddingHorizontal: 14,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.cardBg,
+        maxWidth: '100%',
+    },
+    pillActive: {
+        borderColor: palette.indigo600,
+        backgroundColor: palette.indigo600,
+    },
+    pillText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: palette.textSecondary,
+        flexShrink: 1,
+    },
+    pillTextActive: {
+        color: palette.onDarkPrimary,
+    },
+    summaryBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        marginTop: spacing.md,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.indigo500,
+        backgroundColor: palette.indigoSurface,
+    },
+    summaryText: {
+        flex: 1,
+        fontSize: 13,
+        fontWeight: '700',
+        color: palette.textSecondary,
     },
     sourceOption: {
         flexDirection: 'row',

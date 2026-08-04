@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
@@ -47,6 +47,7 @@ function getSourceModeLabel(value: string): string {
 }
 
 export default function SourcesListScreen() {
+    const router = useRouter();
     const { sources, isLoading, error, fetchSources, deleteSource } = useSources();
     const [searchText, setSearchText] = useState('');
     const [isLoadingSourceStats, setIsLoadingSourceStats] = useState(false);
@@ -458,23 +459,24 @@ export default function SourcesListScreen() {
                                         />
                                     </Pressable>
 
-                                    <Link href={`/quiz/${source.id}`} asChild>
-                                        <Pressable
-                                            style={({ pressed }) => [
-                                                styles.primaryButton,
-                                                pressed ? styles.pressed : null,
-                                            ]}
-                                        >
-                                            <Ionicons
-                                                name="play"
-                                                size={13}
-                                                color={palette.onDarkPrimary}
-                                            />
-                                            <Text style={styles.primaryButtonText}>
-                                                Test Çöz
-                                            </Text>
-                                        </Pressable>
-                                    </Link>
+                                    {/* Link asChild kullanilmiyor: cocuga kendi
+                                        proplarini gecirirken `style`i undefined ile
+                                        eziyor, buton arka planini kaybedip beyaz
+                                        kartta gorunmez ama basilabilir kaliyordu. */}
+                                    <Pressable
+                                        onPress={() => router.push(`/quiz/${source.id}`)}
+                                        style={({ pressed }) => [
+                                            styles.primaryButton,
+                                            pressed ? styles.pressed : null,
+                                        ]}
+                                    >
+                                        <Ionicons
+                                            name="list-outline"
+                                            size={13}
+                                            color={palette.onDarkPrimary}
+                                        />
+                                        <Text style={styles.primaryButtonText}>Konular</Text>
+                                    </Pressable>
                                 </View>
                             </View>
                         </AnimatedCard>

@@ -142,6 +142,10 @@ export function useQuiz(sourceId?: string) {
     const prefetchedQuestionsRef = useRef<Map<string, PreparedQuestion[]>>(new Map());
     const prefetchInFlightRef = useRef<Set<string>>(new Set());
     const askedQuestionIdsRef = useRef<Set<string>>(new Set());
+    // "Tum Konular" modunda siradaki konuyu secebilmek icin konu basina
+    // bankadaki soru sayisi ve bu oturumda kacinin cozuldugu tutuluyor.
+    const bankCountByTopicRef = useRef<Map<string, number>>(new Map());
+    const askedBankCountByTopicRef = useRef<Map<string, number>>(new Map());
 
     const updatePrefetchedCount = useCallback(() => {
         let total = 0;
@@ -160,6 +164,8 @@ export function useQuiz(sourceId?: string) {
     useEffect(() => {
         clearPrefetchedQuestions();
         askedQuestionIdsRef.current.clear();
+        bankCountByTopicRef.current.clear();
+        askedBankCountByTopicRef.current.clear();
         setCurrentQuestionId(null);
         setGenerationStatus(null);
         setStoredQuestionCount(0);
@@ -231,9 +237,26 @@ export function useQuiz(sourceId?: string) {
 
         if (safeTopics.length === 0) {
             setRecommendedTopicId(null);
+            bankCountByTopicRef.current.clear();
             setIsLoading(false);
             return;
         }
+
+        // Konu basina banka sayilari: "Tum Konular" testinde siradaki konuyu
+        // hala cozulmemis sorusu olanlar arasindan secmek icin.
+        const { data: bankRows } = await supabase
+            .from('questions')
+            .select('topic_id')
+            .in(
+                'topic_id',
+                safeTopics.map((topic) => topic.id)
+            );
+
+        const bankCounts = new Map<string, number>();
+        for (const row of bankRows ?? []) {
+            bankCounts.set(row.topic_id, (bankCounts.get(row.topic_id) ?? 0) + 1);
+        }
+        bankCountByTopicRef.current = bankCounts;
 
         const {
             data: { user },
@@ -332,10 +355,38 @@ export function useQuiz(sourceId?: string) {
             }
 
             askedQuestionIdsRef.current.add(picked.id);
+            askedBankCountByTopicRef.current.set(
+                topicId,
+                (askedBankCountByTopicRef.current.get(topicId) ?? 0) + 1
+            );
             return picked;
         },
         []
     );
+
+    /**
+     * "Tum Konular" modunda siradaki konuyu dondurur: bankasinda hala
+     * cozulmemis sorusu olan konular arasindan en cok kalani secer. Boylece
+     * tek konuya takilip kalmadan kaynaktaki tum sorular tuketilir.
+     * Hepsi bittiyse null doner (cagiran taraf AI uretimine dusebilir).
+     */
+    const pickTopicWithRemainingBank = useCallback((): string | null => {
+        let bestTopicId: string | null = null;
+        let bestRemaining = 0;
+
+        for (const topic of topics) {
+            const remaining =
+                (bankCountByTopicRef.current.get(topic.id) ?? 0) -
+                (askedBankCountByTopicRef.current.get(topic.id) ?? 0);
+
+            if (remaining > bestRemaining) {
+                bestRemaining = remaining;
+                bestTopicId = topic.id;
+            }
+        }
+
+        return bestTopicId;
+    }, [topics]);
 
     const prefetchNextQuestion = useCallback(
         async (topic: Topic, difficulty: number) => {
@@ -417,6 +468,9 @@ export function useQuiz(sourceId?: string) {
                 .insert({
                     source_id: sourceId,
                     name: trimmedName,
+                    // Kullanici elle ekledi; kaynagin kendi konu hiyerarsisinden
+                    // ayirt edilsin ki silme yalnizca burada acilsin.
+                    origin: 'manual',
                 })
                 .select('*')
                 .single();
@@ -643,6 +697,7 @@ export function useQuiz(sourceId?: string) {
             refresh,
             generateForTopic,
             submitAnswer,
+            pickTopicWithRemainingBank,
         }),
         [
             source,
@@ -663,6 +718,7 @@ export function useQuiz(sourceId?: string) {
             refresh,
             generateForTopic,
             submitAnswer,
+            pickTopicWithRemainingBank,
         ]
     );
 }

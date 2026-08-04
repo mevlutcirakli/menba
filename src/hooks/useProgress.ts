@@ -124,8 +124,17 @@ export function useProgress() {
                 return;
             }
 
-            channel = supabase
-                .channel(`user-progress-${user.id}`)
+            // Kanal adi ornek basina benzersiz. Sabit ad kullanilinca
+            // (Fast Refresh / cift mount) supabase ayni topic'i geri
+            // donduruyor ve zaten subscribe edilmis kanala `.on()` denendigi
+            // icin "cannot add postgres_changes callbacks after subscribe()"
+            // hatasi atiliyordu.
+            const channelTopic = `user-progress-${user.id}-${Math.random()
+                .toString(36)
+                .slice(2, 10)}`;
+
+            const nextChannel = supabase
+                .channel(channelTopic)
                 .on(
                     'postgres_changes',
                     {
@@ -139,6 +148,15 @@ export function useProgress() {
                     }
                 )
                 .subscribe();
+
+            // getUser() beklenirken unmount olduysa kanali hemen kapat;
+            // yoksa cleanup zaten calismis olur ve kanal acik kalir.
+            if (!isMounted) {
+                void supabase.removeChannel(nextChannel);
+                return;
+            }
+
+            channel = nextChannel;
         };
 
         void setupRealtime();

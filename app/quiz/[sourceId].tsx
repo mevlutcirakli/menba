@@ -1,6 +1,11 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
 import {
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -30,12 +35,20 @@ export default function QuizBySourceScreen() {
         recommendedTopicId,
         isLoading,
         error,
+        refresh,
     } = useQuiz(sourceId);
     const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
     const [newTopicName, setNewTopicName] = useState('');
     const [questionCountByTopicId, setQuestionCountByTopicId] = useState<Record<string, number>>({});
     const [flowNotice, setFlowNotice] = useState<string | null>(null);
+    const [deletingTopicId, setDeletingTopicId] = useState<string | null>(null);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
     const trimmedNewTopicName = newTopicName.trim();
+
+    const totalQuestionCount = useMemo(
+        () => Object.values(questionCountByTopicId).reduce((sum, count) => sum + count, 0),
+        [questionCountByTopicId]
+    );
 
     useEffect(() => {
         if (!sourceId) {
@@ -64,25 +77,6 @@ export default function QuizBySourceScreen() {
         });
     }, [newTopicName, selectedTopicId, sourceId]);
 
-    const recommendedTopicName = useMemo(
-        () => topics.find((topic) => topic.id === recommendedTopicId)?.name ?? null,
-        [topics, recommendedTopicId]
-    );
-
-    const selectedTopicName = useMemo(
-        () => topics.find((topic) => topic.id === selectedTopicId)?.name ?? null,
-        [selectedTopicId, topics]
-    );
-
-    const selectedTopicQuestionCount = useMemo(() => {
-        const focusTopicId = selectedTopicId ?? recommendedTopicId;
-        if (!focusTopicId) {
-            return 0;
-        }
-
-        return questionCountByTopicId[focusTopicId] ?? 0;
-    }, [questionCountByTopicId, recommendedTopicId, selectedTopicId]);
-
     useEffect(() => {
         if (!recommendedTopicId) {
             return;
@@ -97,11 +91,13 @@ export default function QuizBySourceScreen() {
         });
     }, [recommendedTopicId, topics]);
 
+    // Uyari yalnizca kullanici secimi degistirince temizlenir. Onceden
+    // `flowNotice` de bagimliliktaydi: uyari set edilir edilmez efekt tekrar
+    // kosup hemen siliyordu, bu yuzden butonlar hicbir sey yapmiyor gibi
+    // gorunuyordu.
     useEffect(() => {
-        if (flowNotice) {
-            setFlowNotice(null);
-        }
-    }, [flowNotice, newTopicName, selectedTopicId]);
+        setFlowNotice(null);
+    }, [newTopicName, selectedTopicId]);
 
     useEffect(() => {
         if (topics.length === 0) {
@@ -140,56 +136,82 @@ export default function QuizBySourceScreen() {
         };
     }, [topics]);
 
-    const openFlow = (params: { topicId?: string; topicName?: string }) => {
+    // Bu ekran test baslatmaz; tek istisna yeni konu, cunku konu ancak akis
+    // sayfasi acilirken olusturulup ilk sorusu uretiliyor.
+    const handleOpenFlowForNewTopic = () => {
         if (!sourceId) {
             return;
         }
 
-        router.push({
-            pathname: '/quiz/[sourceId]/play',
-            params: {
-                sourceId,
-                ...(params.topicId ? { topicId: params.topicId } : {}),
-                ...(params.topicName ? { topicName: params.topicName } : {}),
-            },
-        });
-    };
-
-    const handleOpenFlowForSelection = () => {
-        if (trimmedNewTopicName) {
-            setFlowNotice('Yeni konu kutusu dolu. Bu konuda soru uretmek icin alttaki butonu kullan.');
-            return;
-        }
-
-        if (selectedTopicId) {
-            openFlow({ topicId: selectedTopicId });
-            return;
-        }
-
-        if (recommendedTopicId) {
-            openFlow({ topicId: recommendedTopicId });
-            return;
-        }
-
-        setFlowNotice('Lutfen bir konu secin veya yeni konu adi girin.');
-    };
-
-    const handleOpenFlowForNewTopic = () => {
         if (!trimmedNewTopicName) {
             setFlowNotice('Yeni konu olusturmak icin once konu adini yaz.');
             return;
         }
 
-        openFlow({ topicName: trimmedNewTopicName });
+        router.push({
+            pathname: '/quiz/[sourceId]/play',
+            params: { sourceId, topicName: trimmedNewTopicName },
+        });
+    };
+
+    const deleteTopic = async (topicId: string) => {
+        setDeletingTopicId(topicId);
+        setDeleteError(null);
+
+        try {
+            // Sorular, loglar ve ilerleme kayitlari 0005 migrasyonundaki
+            // ON DELETE CASCADE ile birlikte siliniyor.
+            const { error: deleteTopicError } = await supabase
+                .from('topics')
+                .delete()
+                .eq('id', topicId);
+
+            if (deleteTopicError) {
+                throw new Error(deleteTopicError.message);
+            }
+
+            if (selectedTopicId === topicId) {
+                setSelectedTopicId(null);
+            }
+
+            await refresh();
+        } catch (removeError) {
+            setDeleteError(
+                removeError instanceof Error ? removeError.message : 'Konu silinemedi.'
+            );
+        } finally {
+            setDeletingTopicId(null);
+        }
+    };
+
+    const handleDeleteTopic = (topicId: string, topicName: string) => {
+        const questionCount = questionCountByTopicId[topicId] ?? 0;
+
+        Alert.alert(
+            'Konu silinsin mi?',
+            questionCount > 0
+                ? `"${topicName}" konusu ve icindeki ${questionCount} soru kalici olarak silinecek. Bu konudaki test gecmisin de gider.`
+                : `"${topicName}" konusu kalici olarak silinecek.`,
+            [
+                { text: 'Vazgec', style: 'cancel' },
+                {
+                    text: 'Sil',
+                    style: 'destructive',
+                    onPress: () => {
+                        void deleteTopic(topicId);
+                    },
+                },
+            ]
+        );
     };
 
     if (isLoading) {
         return (
             <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>Kaynak Bazli Test</Text>
+                <Text style={styles.title}>Konu Yonetimi</Text>
                 <View style={[styles.card, styles.stateCard]}>
                     <SkeletonCard height={92} />
-                    <Text style={styles.description}>Quiz ortami hazirlaniyor...</Text>
+                    <Text style={styles.description}>Konular yukleniyor...</Text>
                 </View>
             </ScrollView>
         );
@@ -198,9 +220,9 @@ export default function QuizBySourceScreen() {
     if (error) {
         return (
             <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>Kaynak Bazli Test</Text>
+                <Text style={styles.title}>Konu Yonetimi</Text>
                 <View style={[styles.card, styles.errorCard]}>
-                    <Text style={styles.errorTitle}>Quiz acilamadi</Text>
+                    <Text style={styles.errorTitle}>Konular acilamadi</Text>
                     <Text style={styles.error}>{error}</Text>
                     <Link href="/(tabs)" style={styles.stateLinkButton}>
                         Kaynaklara Don
@@ -211,144 +233,153 @@ export default function QuizBySourceScreen() {
     }
 
     return (
-        <ScrollView contentContainerStyle={styles.container}>
-            <Text style={styles.title}>Kaynak Bazli Test</Text>
+        // Klavye acilinca "Yeni Konu" kutusu ekranin altinda kaliyordu:
+        // KeyboardAvoidingView icerigi yukari itiyor, ScrollView de odaklanan
+        // alani gorunur tutuyor.
+        <KeyboardAvoidingView
+            style={styles.flex}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+        <ScrollView
+            contentContainerStyle={styles.container}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            automaticallyAdjustKeyboardInsets
+        >
+            <Text style={styles.title}>Konu Yonetimi</Text>
             <View style={styles.stickyHeader}>
                 <Text style={styles.stickyHeaderTitle}>{source?.title ?? 'Kaynak yukleniyor'}</Text>
                 <Text style={styles.stickyHeaderMeta}>
-                    Konu odagi: {selectedTopicName ?? recommendedTopicName ?? '-'}
+                    {topics.length} konu · {totalQuestionCount} soru
                 </Text>
-                <View style={styles.headerChipRow}>
-                    <Text style={[styles.headerChip, styles.headerChipQueue]}>
-                        Secili konuda {selectedTopicQuestionCount} kayitli soru
-                    </Text>
-                    <Text style={[styles.headerChip, styles.headerChipBank]}>
-                        Toplam {topics.length} konu
-                    </Text>
-                </View>
             </View>
 
-            <AnimatedCard style={styles.card} delayMs={30} resetKey={`setup-${sourceId}`}>
-                <Text style={styles.sectionTitle}>Konu Secimi</Text>
-
-                {recommendedTopicName ? (
-                    <Text style={styles.recommendedText}>
-                        Onerilen konu secildi: {recommendedTopicName}
-                    </Text>
-                ) : null}
+            <AnimatedCard style={styles.card} delayMs={30} resetKey={`topics-${sourceId}`}>
+                <Text style={styles.sectionTitle}>Konular</Text>
+                <Text style={styles.helperText}>
+                    Yalnizca &quot;Yeni Konu&quot; akisindan elle ekledigin konular
+                    silinebilir; kaynaktan cikarilanlar kaynagin kendisiyle birlikte
+                    silinir. Test baslatmak icin Test Coz sekmesini kullan.
+                </Text>
 
                 {topics.length === 0 ? (
                     <Text style={styles.description}>
-                        Bu kaynaga ait konu yok. Yeni konu adi girip soru uretebilirsin.
+                        Bu kaynaga ait konu yok. Asagidan yeni konu adi girip soru
+                        uretebilirsin.
                     </Text>
                 ) : (
-                    <View style={styles.topicList}>
-                        {topics.map((topic) => {
-                            const isActive = selectedTopicId === topic.id;
-                            return (
-                                <Pressable
-                                    key={topic.id}
-                                    onPress={() => setSelectedTopicId(topic.id)}
-                                    style={[styles.topicPill, isActive ? styles.topicPillActive : null]}
-                                >
-                                    <Text
-                                        style={[
-                                            styles.topicPillText,
-                                            isActive ? styles.topicPillTextActive : null,
+                    topics.map((topic) => {
+                        const questionCount = questionCountByTopicId[topic.id] ?? 0;
+                        const isDeleting = deletingTopicId === topic.id;
+                        // Kaynaktan cikarilan konular silinmez; yalnizca "Yeni
+                        // Konu" akisindan elle eklenenler kaldirilabilir.
+                        const canDelete = topic.origin === 'manual';
+
+                        return (
+                            <View key={topic.id} style={styles.topicRow}>
+                                <View style={styles.topicRowText}>
+                                    <Text style={styles.topicRowName} numberOfLines={2}>
+                                        {topic.name}
+                                    </Text>
+                                    <Text style={styles.topicRowMeta}>
+                                        {questionCount} soru
+                                        {canDelete ? ' · elle eklendi' : ''}
+                                    </Text>
+                                </View>
+
+                                {canDelete ? (
+                                    <Pressable
+                                        onPress={() => handleDeleteTopic(topic.id, topic.name)}
+                                        disabled={isDeleting}
+                                        style={({ pressed }) => [
+                                            styles.iconButton,
+                                            styles.iconButtonDanger,
+                                            pressed ? styles.pressed : null,
                                         ]}
                                     >
-                                        {topic.name} ({questionCountByTopicId[topic.id] ?? 0})
-                                    </Text>
-                                </Pressable>
-                            );
-                        })}
-                    </View>
+                                        {isDeleting ? (
+                                            <ActivityIndicator
+                                                size="small"
+                                                color={palette.error}
+                                            />
+                                        ) : (
+                                            <Ionicons
+                                                name="trash-outline"
+                                                size={15}
+                                                color={palette.error}
+                                            />
+                                        )}
+                                    </Pressable>
+                                ) : null}
+                            </View>
+                        );
+                    })
                 )}
+
+                {deleteError ? <Text style={styles.error}>{deleteError}</Text> : null}
+            </AnimatedCard>
+
+            <AnimatedCard style={styles.card} delayMs={60} resetKey={`new-topic-${sourceId}`}>
+                <Text style={styles.sectionTitle}>Yeni Konu</Text>
 
                 <TextInput
                     value={newTopicName}
                     onChangeText={setNewTopicName}
                     placeholder="Yeni konu adi (ornek: Phrasal Verbs)"
+                    placeholderTextColor={palette.textMuted}
                     style={styles.input}
                 />
-
-                <View style={styles.flowInfoCard}>
-                    <Text style={styles.flowInfoTitle}>Nasil Calisir?</Text>
-                    <Text style={styles.flowInfoLine}>
-                        1) Bu ekranda konuyu secersin.
-                    </Text>
-                    <Text style={styles.flowInfoLine}>
-                        2) "Akisi Baslat" deyince yeni bir sayfa acilir.
-                    </Text>
-                    <Text style={styles.flowInfoLine}>
-                        3) Soru-cevap akisi o sayfada devam eder.
-                    </Text>
-                </View>
-
-                <View style={styles.apiInfoCard}>
-                    <Text style={styles.apiInfoTitle}>API Ne Zaman Cagrilir?</Text>
-                    <Text style={styles.apiInfoLine}>
-                        Hazir kuyrukta veya soru bankasinda soru varsa API cagrisi yapilmaz.
-                    </Text>
-                    <Text style={styles.apiInfoLine}>
-                        Yalnizca elde soru kalmadiysa AI servisine gidip yeni soru uretilir.
-                    </Text>
-                </View>
-
-                <Pressable
-                    onPress={() => {
-                        handleOpenFlowForSelection();
-                    }}
-                    disabled={isLoading}
-                    style={[styles.button, isLoading ? styles.buttonDisabled : null]}
-                >
-                    <Text style={styles.buttonText}>Secili Konuda Akisi Baslat</Text>
-                </Pressable>
 
                 <Pressable
                     onPress={() => {
                         handleOpenFlowForNewTopic();
                     }}
                     disabled={isLoading}
-                    style={[styles.secondaryButton, isLoading ? styles.buttonDisabled : null]}
+                    style={[
+                        styles.button,
+                        isLoading || !trimmedNewTopicName ? styles.buttonDisabled : null,
+                    ]}
                 >
-                    <Text style={styles.secondaryButtonText}>Yeni Konu ile Akisi Baslat</Text>
+                    <Text style={styles.buttonText}>Bu Konuda Soru Uret</Text>
                 </Pressable>
 
-                {flowNotice ? <Text style={styles.flowNoticeText}>{flowNotice}</Text> : null}
-                <Text style={styles.prefetchInfo}>
-                    Not: Yeni konu yazarsan, akis sayfasi acilirken konu otomatik olusturulur.
-                </Text>
-
-                {recommendedTopicId ? (
-                    <Pressable
-                        onPress={() => {
-                            setSelectedTopicId(recommendedTopicId);
-                            handleOpenFlowForSelection();
-                        }}
-                        disabled={isLoading}
-                        style={[styles.secondaryButton, isLoading ? styles.buttonDisabled : null]}
-                    >
-                        <Text style={styles.secondaryButtonText}>Onerilen Konu ile Baslat</Text>
-                    </Pressable>
+                {/* Konu adi bosken buton pasif gorunur; yine de basilabilir ve
+                    ne yapmasi gerektigini soyleyen yumusak uyari cikar. */}
+                {!trimmedNewTopicName && !flowNotice ? (
+                    <View style={styles.softHintRow}>
+                        <Ionicons
+                            name="information-circle-outline"
+                            size={14}
+                            color={palette.textMuted}
+                        />
+                        <Text style={styles.softHintText}>
+                            Once yukaridaki kutuya konu adi yaz; konu, akis sayfasi acilirken
+                            olusturulur.
+                        </Text>
+                    </View>
                 ) : null}
 
-                <Text style={styles.emptyStateHint}>
-                    Bu ekranda soru gosterilmez. Akis, yeni soru sayfasinda acilir.
-                </Text>
+                {flowNotice ? <Text style={styles.flowNoticeText}>{flowNotice}</Text> : null}
             </AnimatedCard>
 
             <Link href="/(tabs)/quiz" style={styles.stateLinkButton}>
                 Kaynak Listesine Don
             </Link>
         </ScrollView>
+        </KeyboardAvoidingView>
     );
 }
 
 const styles = StyleSheet.create({
+    flex: {
+        flex: 1,
+        backgroundColor: palette.cardBg,
+    },
     container: {
         padding: spacing.lg,
         gap: 12,
+        // Klavye acikken son kart ve buton icin nefes payi.
+        paddingBottom: spacing.xl * 2,
         backgroundColor: palette.cardBg,
     },
     title: {
@@ -374,31 +405,6 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: palette.indigo600,
     },
-    headerChipRow: {
-        marginTop: 4,
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    headerChip: {
-        borderRadius: 9999,
-        borderWidth: 1,
-        fontSize: 11,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        overflow: 'hidden',
-    },
-    headerChipQueue: {
-        borderColor: palette.indigo500,
-        backgroundColor: palette.indigoSurface,
-        color: palette.indigo600,
-    },
-    headerChipBank: {
-        borderColor: palette.indigo500,
-        backgroundColor: palette.indigoSurface,
-        color: palette.indigo600,
-    },
     description: {
         fontSize: 16,
         color: palette.textSecondary,
@@ -416,29 +422,49 @@ const styles = StyleSheet.create({
         ...typography.heading,
         color: palette.textPrimary,
     },
-    topicList: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
+    helperText: {
+        fontSize: 12,
+        lineHeight: 17,
+        color: palette.textMuted,
     },
-    topicPill: {
+    topicRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
         borderWidth: 1,
         borderColor: palette.cardBorder,
-        borderRadius: radius.pill,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
+        borderRadius: radius.md,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        backgroundColor: palette.cardBg,
     },
-    topicPillActive: {
-        borderColor: palette.indigo600,
-        backgroundColor: palette.indigoSurface,
+    topicRowText: {
+        flex: 1,
     },
-    topicPillText: {
-        fontSize: 13,
-        color: palette.textSecondary,
-    },
-    topicPillTextActive: {
-        color: palette.indigo600,
+    topicRowName: {
+        fontSize: 14,
         fontWeight: '700',
+        color: palette.textPrimary,
+    },
+    topicRowMeta: {
+        fontSize: 12,
+        color: palette.textMuted,
+        marginTop: 2,
+    },
+    iconButton: {
+        width: 34,
+        height: 34,
+        borderRadius: radius.md,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+    },
+    iconButtonDanger: {
+        borderColor: palette.error,
+        backgroundColor: palette.cardBg,
+    },
+    pressed: {
+        opacity: 0.8,
     },
     input: {
         borderWidth: 1,
@@ -449,44 +475,6 @@ const styles = StyleSheet.create({
         fontSize: 15,
         color: palette.textPrimary,
         backgroundColor: palette.cardBg,
-    },
-    flowInfoCard: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.md,
-        backgroundColor: palette.indigoSurface,
-        paddingHorizontal: 10,
-        paddingVertical: 10,
-        gap: 4,
-    },
-    flowInfoTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: palette.indigo600,
-    },
-    flowInfoLine: {
-        fontSize: 12,
-        lineHeight: 18,
-        color: palette.textSecondary,
-    },
-    apiInfoCard: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.md,
-        backgroundColor: palette.indigoSurface,
-        paddingHorizontal: 10,
-        paddingVertical: 10,
-        gap: 4,
-    },
-    apiInfoTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: palette.indigo600,
-    },
-    apiInfoLine: {
-        fontSize: 12,
-        lineHeight: 18,
-        color: palette.textSecondary,
     },
     button: {
         backgroundColor: palette.indigo600,
@@ -500,19 +488,6 @@ const styles = StyleSheet.create({
     buttonText: {
         color: palette.cardBg,
         fontSize: 15,
-        fontWeight: '700',
-    },
-    secondaryButton: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.indigo600,
-        paddingVertical: 10,
-        alignItems: 'center',
-        marginTop: 4,
-    },
-    secondaryButtonText: {
-        color: palette.indigo600,
-        fontSize: 14,
         fontWeight: '700',
     },
     error: {
@@ -545,10 +520,17 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '700',
     },
-    recommendedText: {
-        fontSize: 14,
-        color: palette.indigo600,
-        fontWeight: '600',
+    softHintRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 2,
+    },
+    softHintText: {
+        flex: 1,
+        fontSize: 12,
+        lineHeight: 17,
+        color: palette.textMuted,
     },
     flowNoticeText: {
         fontSize: 13,
@@ -559,13 +541,5 @@ const styles = StyleSheet.create({
         borderRadius: radius.sm,
         paddingHorizontal: 10,
         paddingVertical: 8,
-    },
-    prefetchInfo: {
-        fontSize: 12,
-        color: palette.textMuted,
-    },
-    emptyStateHint: {
-        fontSize: 13,
-        color: palette.textSecondary,
     },
 });

@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+    KeyboardAvoidingView,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from 'react-native';
 import { supabase } from '../src/services/supabase';
 import { palette, radius, spacing, typography } from '../src/theme/tokens';
 
@@ -44,7 +52,11 @@ export default function SignInScreen() {
     };
 
     return (
-        <View style={styles.container}>
+        // Sifre alani klavyenin altinda kalmasin.
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
             <Text style={styles.title}>Menba Giris</Text>
             <Text style={styles.description}>Devam etmek icin oturum ac veya hesap olustur.</Text>
 
@@ -75,7 +87,7 @@ export default function SignInScreen() {
             <Pressable style={styles.secondaryButton} onPress={signUp} disabled={isSubmitting}>
                 <Text style={styles.secondaryButtonText}>Kayit Ol</Text>
             </Pressable>
-        </View>
+        </KeyboardAvoidingView>
     );
 }
 

@@ -30,7 +30,10 @@ export default function RootLayout() {
             <Stack>
                 <Stack.Protected guard={Boolean(session)}>
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                    <Stack.Screen name="quiz/[sourceId]" options={{ title: 'Test' }} />
+                    <Stack.Screen
+                        name="quiz/[sourceId]"
+                        options={{ title: 'Konu Yönetimi' }}
+                    />
                     <Stack.Screen
                         name="quiz/[sourceId]/play"
                         options={{ title: 'Soru Akışı' }}
