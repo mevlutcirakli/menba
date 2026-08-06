@@ -3,7 +3,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Pressable,
@@ -33,22 +33,26 @@ type ImportStatus = 'idle' | 'processing' | 'success' | 'error';
 // Ekran tek modda calisiyor: dosyadan dogrudan soru bankasi uretiliyor.
 const INGEST_MODE: IngestMode = 'questions-only';
 
-/** "Kategori" secimi sources.source_type sutununa yaziliyor. */
-const CATEGORY_OPTIONS = [
-    'YDS Genel',
-    'YÖKDİL',
-    'Dil Bilgisi',
-    'Kelime',
-    'Okuma',
-    'Diğer',
-] as const;
+/**
+ * source_type sutunu kategori icin de kullaniliyor ama eskiden ingest modu
+ * yaziliyordu. Bu degerler kullanicinin yazdigi bir kategori degil; oneri
+ * listesinde gosterilmemeliler.
+ */
+const NON_CATEGORY_SOURCE_TYPES = new Set([
+    'hybrid',
+    'questions-only',
+    'topics-only',
+    'custom',
+]);
+
+/** Oneri olarak gosterilecek en fazla kategori sayisi. */
+const CATEGORY_SUGGESTION_LIMIT = 6;
 
 export default function AddSourceScreen() {
     const router = useRouter();
-    const { createSource } = useSources();
+    const { createSource, sources } = useSources();
     const [title, setTitle] = useState('');
-    const [category, setCategory] = useState<string>(CATEGORY_OPTIONS[0]);
-    const [isCategoryOpen, setIsCategoryOpen] = useState(false);
+    const [category, setCategory] = useState('');
     const [contentText, setContentText] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isImportingFile, setIsImportingFile] = useState(false);
@@ -57,6 +61,21 @@ export default function AddSourceScreen() {
     const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
     const [formInfo, setFormInfo] = useState<string | null>(null);
+
+    // Oneriler kullanicinin kendi kaynaklarindan geliyor: uygulama alandan
+    // bagimsiz, "YDS" gibi sabit bir liste herkese uymuyor.
+    const categorySuggestions = useMemo(() => {
+        const seen = new Set<string>();
+        for (const source of sources) {
+            const value = source.source_type?.trim();
+            if (!value || NON_CATEGORY_SOURCE_TYPES.has(value)) {
+                continue;
+            }
+            seen.add(value);
+        }
+
+        return Array.from(seen).slice(0, CATEGORY_SUGGESTION_LIMIT);
+    }, [sources]);
 
     const closeSheet = () => {
         if (router.canGoBack()) {
@@ -198,7 +217,8 @@ export default function AddSourceScreen() {
             const result = await createSource({
                 title: title.trim(),
                 contentText: contentText.trim(),
-                sourceType: category,
+                // Bos birakildiysa createSource kendi varsayilanini yaziyor.
+                sourceType: category.trim() || undefined,
                 topicNames: [],
                 ingestMode: INGEST_MODE,
             });
@@ -345,52 +365,49 @@ export default function AddSourceScreen() {
                 <TextInput
                     value={title}
                     onChangeText={setTitle}
-                    placeholder="Örn: YDS 2024 Deneme Sınavı"
+                    placeholder="Örn: 3. Ünite Ders Notları"
                     placeholderTextColor={palette.textMuted}
                     style={styles.input}
                 />
 
                 <Text style={styles.fieldLabel}>Kategori</Text>
-                <Pressable
-                    onPress={() => setIsCategoryOpen((previous) => !previous)}
-                    style={({ pressed }) => [
-                        styles.input,
-                        styles.selectRow,
-                        pressed ? styles.pressed : null,
-                    ]}
-                >
-                    <Text style={styles.selectValue}>{category}</Text>
-                    <Ionicons
-                        name={isCategoryOpen ? 'chevron-up' : 'chevron-down'}
-                        size={17}
-                        color={palette.textMuted}
-                    />
-                </Pressable>
+                <TextInput
+                    value={category}
+                    onChangeText={setCategory}
+                    placeholder="Örn: Ticaret Hukuku (isteğe bağlı)"
+                    placeholderTextColor={palette.textMuted}
+                    style={styles.input}
+                />
 
-                {isCategoryOpen ? (
-                    <View style={styles.selectMenu}>
-                        {CATEGORY_OPTIONS.map((option) => (
-                            <Pressable
-                                key={option}
-                                onPress={() => {
-                                    setCategory(option);
-                                    setIsCategoryOpen(false);
-                                }}
-                                style={({ pressed }) => [
-                                    styles.selectOption,
-                                    pressed ? styles.selectOptionPressed : null,
-                                ]}
-                            >
-                                <Text style={styles.selectOptionText}>{option}</Text>
-                                {option === category ? (
-                                    <Ionicons
-                                        name="checkmark"
-                                        size={16}
-                                        color={palette.accent}
-                                    />
-                                ) : null}
-                            </Pressable>
-                        ))}
+                {categorySuggestions.length > 0 ? (
+                    <View style={styles.suggestionRow}>
+                        {categorySuggestions.map((suggestion) => {
+                            const isActive = suggestion === category.trim();
+
+                            return (
+                                <Pressable
+                                    key={suggestion}
+                                    onPress={() => setCategory(isActive ? '' : suggestion)}
+                                    style={({ pressed }) => [
+                                        styles.suggestionChip,
+                                        isActive ? styles.suggestionChipActive : null,
+                                        pressed ? styles.pressed : null,
+                                    ]}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.suggestionChipText,
+                                            isActive
+                                                ? styles.suggestionChipTextActive
+                                                : null,
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {suggestion}
+                                    </Text>
+                                </Pressable>
+                            );
+                        })}
                     </View>
                 ) : null}
 
@@ -533,37 +550,32 @@ const styles = StyleSheet.create({
         color: palette.textPrimary,
         backgroundColor: palette.cardBg,
     },
-    selectRow: {
+    suggestionRow: {
         flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        flexWrap: 'wrap',
         gap: spacing.sm,
+        marginTop: spacing.xs,
     },
-    selectValue: {
-        fontSize: 14,
-        color: palette.textPrimary,
-    },
-    selectMenu: {
+    suggestionChip: {
+        paddingVertical: 6,
+        paddingHorizontal: 11,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: palette.cardBorder,
-        borderRadius: radius.md,
         backgroundColor: palette.cardBg,
-        overflow: 'hidden',
+        maxWidth: '100%',
     },
-    selectOption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: spacing.sm,
-        paddingHorizontal: spacing.md,
-        paddingVertical: 12,
-    },
-    selectOptionPressed: {
+    suggestionChipActive: {
+        borderColor: palette.primaryBorder,
         backgroundColor: palette.primarySurface,
     },
-    selectOptionText: {
-        fontSize: 14,
-        color: palette.textPrimary,
+    suggestionChipText: {
+        ...uiType.small,
+        color: palette.textSecondary,
+    },
+    suggestionChipTextActive: {
+        color: palette.accent,
+        fontWeight: '700',
     },
     submitButton: {
         flexDirection: 'row',

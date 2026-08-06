@@ -67,6 +67,36 @@ function resolveDisplayName(email: string | undefined, metadata: Record<string, 
     return localPart.charAt(0).toLocaleUpperCase('tr-TR') + localPart.slice(1);
 }
 
+/**
+ * Selamlamanin alt satiri. Uygulama konudan bagimsiz: birisi YDS'ye, birisi
+ * ticaret hukukuna calisiyor olabilir. Bu yuzden sabit bir alan adi yerine
+ * kullanicinin kendi verisinden turetiliyor.
+ */
+function buildGreetingSubtitle(input: {
+    sourceCount: number;
+    answeredCount: number;
+    streakDays: number;
+    lastSourceTitle: string | null;
+}): string {
+    if (input.sourceCount === 0) {
+        return 'İlk kaynağını ekleyerek başla';
+    }
+
+    if (input.answeredCount === 0) {
+        return 'Kaynaklarından ilk testini çöz';
+    }
+
+    if (input.streakDays >= 2) {
+        return `${input.streakDays} günlük seriyi sürdür`;
+    }
+
+    if (input.lastSourceTitle) {
+        return `${input.lastSourceTitle} çalışmana devam edelim`;
+    }
+
+    return 'Çalışmaya devam edelim';
+}
+
 export default function DashboardScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -195,7 +225,14 @@ export default function DashboardScreen() {
                         <Text style={styles.greeting} numberOfLines={1}>
                             {displayName ? `Merhaba, ${displayName}` : 'Merhaba'} 👋
                         </Text>
-                        <Text style={styles.greetingSub}>YDS hazırlığına devam edelim</Text>
+                        <Text style={styles.greetingSub} numberOfLines={1}>
+                            {buildGreetingSubtitle({
+                                sourceCount,
+                                answeredCount,
+                                streakDays,
+                                lastSourceTitle: recentSessions[0]?.sourceTitle ?? null,
+                            })}
+                        </Text>
                     </View>
 
                     <Pressable
