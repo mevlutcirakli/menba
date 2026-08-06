@@ -7,7 +7,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '../src/hooks/useAuth';
-import { palette } from '../src/theme/tokens';
+import { palette, radius } from '../src/theme/tokens';
 
 export default function RootLayout() {
     const { session, isLoading } = useAuth();
@@ -24,7 +24,7 @@ export default function RootLayout() {
             <View style={styles.loadingContainer}>
                 {/* Acilis ekrani acik zeminli; koyu ikon dogru secim. */}
                 <StatusBar style="dark" />
-                <ActivityIndicator size="large" color={palette.indigo600} />
+                <ActivityIndicator size="large" color={palette.primary} />
             </View>
         );
     }
@@ -34,25 +34,47 @@ export default function RootLayout() {
     // sign-in'e tasiyan mekanizma budur; elle Redirect gerekmiyor.
     return (
         <>
-            {/* Varsayilan: acik zeminli ekranlar (giris, soru akisi) icin koyu
-                ikon. Koyu ust bar tasiyan sekmelerde AppHeader bunu "light"
-                ile eziyor; expo-status-bar prop'lari mount sirasina gore
-                birlestiriyor, en son mount edilen kazaniyor. */}
+            {/* Tum ekranlar acik zeminli, dolayisiyla durum cubugu ikonlari
+                her yerde koyu. Ekranlar ayrica kendi StatusBar'ini
+                cizmeye devam ediyor: expo-status-bar prop'lari mount
+                sirasina gore birlestiriyor, en son mount edilen kazaniyor. */}
             <StatusBar style="dark" />
             <Stack>
                 <Stack.Protected guard={Boolean(session)}>
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                    {/* Tasarimda alttan acilan sayfa. Android'de formSheet ile
+                        native baslik desteklenmiyor, zaten baslik sheet'in
+                        icinde yaziyor. Tutamak elle ciziliyor:
+                        sheetGrabberVisible yalnizca iOS'ta etkili. */}
                     <Stack.Screen
                         name="add-source"
-                        options={{ title: 'Yeni Kaynak', presentation: 'modal' }}
+                        options={{
+                            headerShown: false,
+                            presentation: 'formSheet',
+                            sheetAllowedDetents: [0.72, 0.96],
+                            sheetInitialDetentIndex: 0,
+                            sheetCornerRadius: radius.sheet,
+                            sheetGrabberVisible: false,
+                        }}
                     />
+                    {/* Bu ekran kendi basligini cizmiyor: geri butonu icin
+                        native baslik duruyor, yalnizca renkleri yeni paletle
+                        eslestirildi. */}
                     <Stack.Screen
                         name="quiz/[sourceId]"
-                        options={{ title: 'Konu Yönetimi' }}
+                        options={{
+                            title: 'Konu Yönetimi',
+                            headerStyle: { backgroundColor: palette.pageBg },
+                            headerTintColor: palette.textPrimary,
+                            headerTitleStyle: { fontWeight: '700' },
+                            headerShadowVisible: false,
+                        }}
                     />
+                    {/* Soru akisi kendi ust barini (konu adi, ilerleme, kapat)
+                        ciziyor; native baslik ikinci bir bar olurdu. */}
                     <Stack.Screen
                         name="quiz/[sourceId]/play"
-                        options={{ title: 'Soru Akışı' }}
+                        options={{ headerShown: false }}
                     />
                 </Stack.Protected>
 

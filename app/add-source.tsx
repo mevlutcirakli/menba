@@ -1,13 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
-import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
     ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -15,70 +13,65 @@ import {
     TextInput,
     View,
 } from 'react-native';
-import * as Haptics from 'expo-haptics';
-import { AnimatedCard } from '../src/components/AnimatedCard';
-import { AppHeader } from '../src/components/AppHeader';
-import { useSources, type IngestMode } from '../src/hooks/useSources';
+import {
+    MAX_PROCESSED_CONTENT_CHARS,
+    useSources,
+    type IngestMode,
+} from '../src/hooks/useSources';
 import { extractSourceTextFromFile } from '../src/services/geminiService';
-import { gradients, palette, radius, shadow, spacing, uiType } from '../src/theme/tokens';
+import { palette, radius, spacing, uiType } from '../src/theme/tokens';
 
-// Sinir bilincli olarak dusuk: soru cikarma hattinda zaten en fazla
-// 8 x 10.000 karakter isleniyor (bkz. useSources CONTENT_CHUNK_SIZE /
-// MAX_CONTENT_CHUNKS). Daha buyuk dosya, islenmeyen icerik icin dakikalarca
-// bekletiyor.
-const MAX_IMPORT_FILE_SIZE_MB = 2;
+// Ekranda yazan sinir bu sabitten turetiliyor ki etiket ile gercek davranis
+// birbirinden ayrilmasin. Dosya sinirinin ustunde bir de icerik siniri var
+// (MAX_PROCESSED_CONTENT_CHARS): bu dosya boyutuna sigan ama hattin
+// isleyeceginden uzun metinler icin asagida ayrica uyari cikiyor.
+const MAX_IMPORT_FILE_SIZE_MB = 4;
 const MAX_IMPORT_FILE_SIZE_BYTES = MAX_IMPORT_FILE_SIZE_MB * 1024 * 1024;
-// Beklenen soru sayisi tahmininde taban deger; icerikten hic soru kalibi
-// cikarilamazsa en az bu kadar soru hedefleniyor.
-const MIN_EXPECTED_QUESTIONS = 8;
-const MAX_AUTO_EXTRACT_QUESTIONS_TOTAL = 80;
 
 type ImportStatus = 'idle' | 'processing' | 'success' | 'error';
 
 // Ekran tek modda calisiyor: dosyadan dogrudan soru bankasi uretiliyor.
-// `IngestMode` tipi ve useSources'taki hybrid/topics-only isleme kodu
-// duruyor; baska bir mod gerekirse createSource'a bu sabiti degistirmek
-// yeterli.
 const INGEST_MODE: IngestMode = 'questions-only';
 
-function estimateQuestionLikeCount(text: string): number {
-    const numberedStemCount = text.match(/(?:^|\n)\s*\d{1,3}[.)-]\s+.+/g)?.length ?? 0;
-    const optionStemCount = text.match(/(?:^|\n)\s*[A-Ea-e][.)]\s+.+/g)?.length ?? 0;
-
-    return Math.max(numberedStemCount, Math.floor(optionStemCount / 4));
-}
+/** "Kategori" secimi sources.source_type sutununa yaziliyor. */
+const CATEGORY_OPTIONS = [
+    'YDS Genel',
+    'YÖKDİL',
+    'Dil Bilgisi',
+    'Kelime',
+    'Okuma',
+    'Diğer',
+] as const;
 
 export default function AddSourceScreen() {
     const router = useRouter();
     const { createSource } = useSources();
     const [title, setTitle] = useState('');
+    const [category, setCategory] = useState<string>(CATEGORY_OPTIONS[0]);
+    const [isCategoryOpen, setIsCategoryOpen] = useState(false);
     const [contentText, setContentText] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isImportingFile, setIsImportingFile] = useState(false);
     const [importStatus, setImportStatus] = useState<ImportStatus>('idle');
     const [importStatusText, setImportStatusText] = useState<string | null>(null);
     const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
-    const [importedCharCount, setImportedCharCount] = useState<number>(0);
     const [formError, setFormError] = useState<string | null>(null);
     const [formInfo, setFormInfo] = useState<string | null>(null);
-    const [lastInsertedQuestionBreakdown, setLastInsertedQuestionBreakdown] = useState<
-        Array<{ topicName: string; questionCount: number }>
-    >([]);
 
-    // Konu adlari kaynak islenirken sunucu tarafinda cikariliyor; bu ekranda
-    // onceden gosterilen konu onerisi adimi kalkti.
-    const estimatedQuestionCount = estimateQuestionLikeCount(contentText);
-    const expectedQuestionCount = Math.min(
-        MAX_AUTO_EXTRACT_QUESTIONS_TOTAL,
-        Math.max(MIN_EXPECTED_QUESTIONS, estimatedQuestionCount)
-    );
+    const closeSheet = () => {
+        if (router.canGoBack()) {
+            router.back();
+            return;
+        }
+
+        router.replace('/(tabs)/sources');
+    };
 
     const handlePickFile = async () => {
         setFormError(null);
         setFormInfo(null);
         setImportStatus('idle');
         setImportStatusText(null);
-        setImportedCharCount(0);
         setSelectedFileName(null);
 
         const result = await DocumentPicker.getDocumentAsync({
@@ -119,12 +112,8 @@ export default function AddSourceScreen() {
             try {
                 const fileText = await FileSystemLegacy.readAsStringAsync(asset.uri);
                 setContentText(fileText);
-                setImportedCharCount(fileText.trim().length);
                 setImportStatus('success');
-                setImportStatusText('Metin alındı. Soru hazırlığı üretim adımında yapılacak.');
-                setFormInfo(
-                    'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
-                );
+                setImportStatusText(`${fileText.trim().length} karakter alındı.`);
             } catch (readError) {
                 setImportStatus('error');
                 setImportStatusText('Metin dosyası okunamadı.');
@@ -141,7 +130,6 @@ export default function AddSourceScreen() {
             setIsImportingFile(true);
             setImportStatus('processing');
             setImportStatusText('PDF metni çıkarılıyor...');
-            setFormInfo('PDF metni çıkarılıyor...');
 
             try {
                 const base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, {
@@ -155,6 +143,8 @@ export default function AddSourceScreen() {
                 });
 
                 if (!extractedText.trim()) {
+                    setImportStatus('error');
+                    setImportStatusText('PDF metni boş geldi.');
                     setFormError(
                         'PDF dosyasından metin çıkarılamadı. Farklı bir PDF dene veya metni manuel ekle.'
                     );
@@ -162,14 +152,8 @@ export default function AddSourceScreen() {
                 }
 
                 setContentText(extractedText);
-                setImportedCharCount(extractedText.trim().length);
                 setImportStatus('success');
-                setImportStatusText(
-                    'PDF metni çıkarıldı. Soru hazırlığı üretim adımında yapılacak.'
-                );
-                setFormInfo(
-                    'Dosya hazır. "AI ile Analiz Et ve Üret" butonuna bastığında soru bankası oluşturulacak.'
-                );
+                setImportStatusText(`${extractedText.trim().length} karakter alındı.`);
             } catch (extractError) {
                 setImportStatus('error');
                 setImportStatusText('PDF işleme başarısız oldu.');
@@ -209,17 +193,15 @@ export default function AddSourceScreen() {
         setIsSubmitting(true);
         setFormError(null);
         setFormInfo(null);
-        setLastInsertedQuestionBreakdown([]);
 
         try {
             const result = await createSource({
                 title: title.trim(),
                 contentText: contentText.trim(),
+                sourceType: category,
                 topicNames: [],
                 ingestMode: INGEST_MODE,
             });
-            setTitle('');
-            setContentText('');
 
             if (result.warning) {
                 setFormError(result.warning);
@@ -243,8 +225,12 @@ export default function AddSourceScreen() {
             setFormInfo(
                 `Kaynak kaydedildi: ${result.insertedQuestionCount} soru, ${result.insertedTopicCount} konu eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
             );
-            setLastInsertedQuestionBreakdown(result.insertedQuestionCountByTopic);
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+            setTitle('');
+            setContentText('');
+            setSelectedFileName(null);
+            setImportStatus('idle');
         } catch (createError) {
             setFormError(
                 createError instanceof Error ? createError.message : 'Kaynak kaydedilemedi.'
@@ -255,14 +241,13 @@ export default function AddSourceScreen() {
         }
     };
 
+    const isBusy = isSubmitting || isImportingFile;
+
     return (
-        // Baslik kutusuna yazarken klavye alani kapatmasin diye icerik
-        // klavye yuksekligi kadar yukari itiliyor.
-        <KeyboardAvoidingView
-            style={styles.screen}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-            <AppHeader />
+        <View style={styles.sheet}>
+            {/* Kendi tutamagimiz: sheetGrabberVisible yalnizca iOS'ta calisiyor,
+                bu yuzden iki platformda da ayni gorunsun diye elle ciziliyor. */}
+            <View style={styles.grabber} />
 
             <ScrollView
                 contentContainerStyle={styles.container}
@@ -271,245 +256,219 @@ export default function AddSourceScreen() {
                 keyboardDismissMode="on-drag"
                 automaticallyAdjustKeyboardInsets
             >
-                <LinearGradient
-                    colors={gradients.hero}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.hero}
+                <Text style={styles.sheetTitle}>Yeni Kaynak Ekle</Text>
+
+                <Pressable
+                    style={({ pressed }) => [
+                        styles.dropzone,
+                        pressed ? styles.pressed : null,
+                        isBusy ? styles.disabled : null,
+                    ]}
+                    onPress={() => void handlePickFile()}
+                    disabled={isBusy}
                 >
-                    <Text style={styles.heroEyebrow}>AI DESTEKLİ KAYNAK İŞLEME</Text>
-                    <Text style={styles.heroTitle}>Kaynağını Akıllı Şekilde İşle</Text>
-                    <Text style={styles.heroDescription}>
-                        PDF veya metin dosyanı yükle; konular ve soru bankası otomatik
-                        üretilsin.
-                    </Text>
-                </LinearGradient>
-
-                <AnimatedCard style={styles.panel} delayMs={20} resetKey="create-source-card">
-                    <Text style={styles.sectionLabel}>1. BELGE YÜKLE</Text>
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.dropzone,
-                            pressed ? styles.pressed : null,
-                            isImportingFile ? styles.disabled : null,
-                        ]}
-                        onPress={() => void handlePickFile()}
-                        disabled={isImportingFile || isSubmitting}
-                    >
-                        <View style={styles.dropzoneIcon}>
-                            {isImportingFile ? (
-                                <ActivityIndicator size="small" color={palette.indigo600} />
-                            ) : (
-                                <Ionicons
-                                    name="cloud-upload-outline"
-                                    size={22}
-                                    color={palette.indigo600}
-                                />
-                            )}
-                        </View>
-                        <Text style={styles.dropzoneTitle}>
-                            {isImportingFile ? 'Dosya işleniyor...' : 'Dosya Seçin'}
-                        </Text>
-                        <Text style={styles.dropzoneHint}>
-                            Desteklenen formatlar: TXT, PDF
-                        </Text>
-                        {selectedFileName ? (
-                            <Text style={styles.dropzoneFile} numberOfLines={1}>
-                                {selectedFileName}
-                            </Text>
-                        ) : null}
-                    </Pressable>
-
-                    <Text style={styles.fieldLabel}>KAYNAK BAŞLIĞI</Text>
-                    <TextInput
-                        value={title}
-                        onChangeText={setTitle}
-                        placeholder="Örn: YDS Grammar Notları"
-                        placeholderTextColor={palette.textMuted}
-                        style={styles.input}
-                    />
-
-                    <View style={styles.readyDataRow}>
-                        <Ionicons
-                            name="document-text-outline"
-                            size={14}
-                            color={palette.textMuted}
-                        />
-                        <Text style={styles.readyDataText}>
-                            Hazır veri:{' '}
-                            {importedCharCount > 0
-                                ? `${importedCharCount} karakter`
-                                : 'henüz dosya seçilmedi'}
-                        </Text>
-                    </View>
-
-                    {importStatus !== 'idle' ? (
-                        <View
-                            style={[
-                                styles.statusCard,
-                                importStatus === 'success'
-                                    ? styles.statusCardSuccess
-                                    : importStatus === 'error'
-                                      ? styles.statusCardError
-                                      : styles.statusCardProcessing,
-                            ]}
-                        >
-                            <View style={styles.statusHeader}>
-                                <Text style={styles.statusTitle}>
-                                    {importStatus === 'processing'
-                                        ? 'İşlem Sürüyor'
-                                        : importStatus === 'success'
-                                          ? 'İşlem Tamamlandı'
-                                          : 'İşlem Başarısız'}
-                                </Text>
-                                {importStatus === 'processing' ? (
-                                    <ActivityIndicator
-                                        size="small"
-                                        color={palette.indigo600}
-                                    />
-                                ) : null}
-                            </View>
-                            {importStatusText ? (
-                                <Text style={styles.statusDetail}>{importStatusText}</Text>
-                            ) : null}
-                        </View>
-                    ) : null}
-
-                    <View style={styles.expectedBox}>
-                        <Text style={styles.expectedTitle}>Beklenen İşlem Özeti</Text>
-                        <Text style={styles.expectedText}>
-                            Tahmini: ~{expectedQuestionCount} soru bankaya eklenecek. Konu
-                            başlıkları içerikten otomatik çıkarılacak.
-                        </Text>
-                    </View>
-
-                    {formInfo ? <Text style={styles.infoText}>{formInfo}</Text> : null}
-
-                    {lastInsertedQuestionBreakdown.length > 0 ? (
-                        <View style={styles.breakdownBox}>
-                            <Text style={styles.fieldLabel}>SON YÜKLEME SORU DAĞILIMI</Text>
-                            {lastInsertedQuestionBreakdown.map((item) => (
-                                <View key={item.topicName} style={styles.breakdownRow}>
-                                    <Text style={styles.breakdownName} numberOfLines={1}>
-                                        {item.topicName}
-                                    </Text>
-                                    <Text style={styles.breakdownCount}>
-                                        {item.questionCount} soru
-                                    </Text>
-                                </View>
-                            ))}
-                        </View>
-                    ) : null}
-
-                    {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.submitButton,
-                            pressed ? styles.pressed : null,
-                            isSubmitting ? styles.disabled : null,
-                        ]}
-                        onPress={() => {
-                            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                            void handleCreateSource();
-                        }}
-                        disabled={isSubmitting || isImportingFile}
-                    >
-                        {isSubmitting ? (
-                            <ActivityIndicator size="small" color={palette.onDarkPrimary} />
+                    <View style={styles.dropzoneIcon}>
+                        {isImportingFile ? (
+                            <ActivityIndicator size="small" color={palette.accent} />
                         ) : (
                             <Ionicons
-                                name="sparkles"
-                                size={16}
-                                color={palette.onDarkPrimary}
+                                name="cloud-upload-outline"
+                                size={24}
+                                color={palette.accent}
                             />
                         )}
-                        <Text style={styles.submitButtonText}>
-                            {isSubmitting ? 'İşleniyor...' : 'AI ile Analiz Et ve Üret'}
+                    </View>
+                    <Text style={styles.dropzoneTitle}>
+                        {isImportingFile ? 'Dosya işleniyor...' : 'PDF veya metin dosyası seçin'}
+                    </Text>
+                    <Text style={styles.dropzoneHint}>
+                        Maksimum dosya boyutu: {MAX_IMPORT_FILE_SIZE_MB}MB
+                    </Text>
+                    {selectedFileName ? (
+                        <Text style={styles.dropzoneFile} numberOfLines={1}>
+                            {selectedFileName}
                         </Text>
-                    </Pressable>
+                    ) : null}
+                </Pressable>
 
-                    {/* Modal olarak acildigi icin listeye "gitmek" yerine
-                        sadece kapatiyoruz; sources ekrani zaten arkada duruyor. */}
-                    <Pressable
-                        onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)/sources'))}
-                        style={({ pressed }) => [
-                            styles.ghostButton,
-                            pressed ? styles.pressed : null,
+                {/* Dosya 4MB'a sigsa bile metin hattin isleyeceginden uzun
+                    olabiliyor; fazlasi sessizce dusmesin. */}
+                {contentText.trim().length > MAX_PROCESSED_CONTENT_CHARS ? (
+                    <View style={[styles.statusRow, styles.statusRowWarning]}>
+                        <Ionicons
+                            name="information-circle"
+                            size={16}
+                            color={palette.amber600}
+                        />
+                        <Text style={styles.statusText}>
+                            Metin {contentText.trim().length.toLocaleString('tr-TR')} karakter.
+                            Soru üretimi ilk{' '}
+                            {MAX_PROCESSED_CONTENT_CHARS.toLocaleString('tr-TR')} karakteri
+                            işliyor; gerisi bu yüklemede kullanılmayacak.
+                        </Text>
+                    </View>
+                ) : null}
+
+                {importStatus !== 'idle' && importStatusText ? (
+                    <View
+                        style={[
+                            styles.statusRow,
+                            importStatus === 'success'
+                                ? styles.statusRowSuccess
+                                : importStatus === 'error'
+                                  ? styles.statusRowError
+                                  : styles.statusRowProcessing,
                         ]}
                     >
-                        <Ionicons name="close-outline" size={14} color={palette.indigo600} />
-                        <Text style={styles.ghostButtonText}>Kapat</Text>
-                    </Pressable>
-                </AnimatedCard>
+                        {importStatus === 'processing' ? (
+                            <ActivityIndicator size="small" color={palette.accent} />
+                        ) : (
+                            <Ionicons
+                                name={
+                                    importStatus === 'success'
+                                        ? 'checkmark-circle'
+                                        : 'alert-circle'
+                                }
+                                size={16}
+                                color={
+                                    importStatus === 'success'
+                                        ? palette.success
+                                        : palette.danger
+                                }
+                            />
+                        )}
+                        <Text style={styles.statusText}>{importStatusText}</Text>
+                    </View>
+                ) : null}
+
+                <Text style={styles.fieldLabel}>Kaynak Adı</Text>
+                <TextInput
+                    value={title}
+                    onChangeText={setTitle}
+                    placeholder="Örn: YDS 2024 Deneme Sınavı"
+                    placeholderTextColor={palette.textMuted}
+                    style={styles.input}
+                />
+
+                <Text style={styles.fieldLabel}>Kategori</Text>
+                <Pressable
+                    onPress={() => setIsCategoryOpen((previous) => !previous)}
+                    style={({ pressed }) => [
+                        styles.input,
+                        styles.selectRow,
+                        pressed ? styles.pressed : null,
+                    ]}
+                >
+                    <Text style={styles.selectValue}>{category}</Text>
+                    <Ionicons
+                        name={isCategoryOpen ? 'chevron-up' : 'chevron-down'}
+                        size={17}
+                        color={palette.textMuted}
+                    />
+                </Pressable>
+
+                {isCategoryOpen ? (
+                    <View style={styles.selectMenu}>
+                        {CATEGORY_OPTIONS.map((option) => (
+                            <Pressable
+                                key={option}
+                                onPress={() => {
+                                    setCategory(option);
+                                    setIsCategoryOpen(false);
+                                }}
+                                style={({ pressed }) => [
+                                    styles.selectOption,
+                                    pressed ? styles.selectOptionPressed : null,
+                                ]}
+                            >
+                                <Text style={styles.selectOptionText}>{option}</Text>
+                                {option === category ? (
+                                    <Ionicons
+                                        name="checkmark"
+                                        size={16}
+                                        color={palette.accent}
+                                    />
+                                ) : null}
+                            </Pressable>
+                        ))}
+                    </View>
+                ) : null}
+
+                {formInfo ? <Text style={styles.infoText}>{formInfo}</Text> : null}
+                {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
+
+                <Pressable
+                    style={({ pressed }) => [
+                        styles.submitButton,
+                        pressed ? styles.pressed : null,
+                        isBusy ? styles.disabled : null,
+                    ]}
+                    onPress={() => {
+                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        void handleCreateSource();
+                    }}
+                    disabled={isBusy}
+                >
+                    {isSubmitting ? (
+                        <ActivityIndicator size="small" color={palette.onDarkPrimary} />
+                    ) : null}
+                    <Text style={styles.submitButtonText}>
+                        {isSubmitting ? 'İşleniyor...' : 'Analiz Et ve Soru Üret'}
+                    </Text>
+                </Pressable>
+
+                <Pressable
+                    onPress={closeSheet}
+                    style={({ pressed }) => [
+                        styles.cancelButton,
+                        pressed ? styles.pressed : null,
+                    ]}
+                >
+                    <Text style={styles.cancelButtonText}>İptal</Text>
+                </Pressable>
             </ScrollView>
-        </KeyboardAvoidingView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
-    screen: {
+    sheet: {
         flex: 1,
-        backgroundColor: palette.pageBg,
+        backgroundColor: palette.cardBg,
+    },
+    grabber: {
+        alignSelf: 'center',
+        width: 38,
+        height: 4,
+        borderRadius: radius.pill,
+        backgroundColor: palette.cardBorder,
+        marginTop: spacing.sm,
+        marginBottom: spacing.xs,
     },
     container: {
-        padding: spacing.lg,
-        gap: spacing.md,
+        paddingHorizontal: spacing.lg,
+        paddingTop: spacing.md,
         paddingBottom: spacing.xl,
-    },
-    hero: {
-        borderRadius: radius.lg,
-        padding: spacing.lg,
         gap: spacing.sm,
     },
-    heroEyebrow: {
-        color: palette.indigo300,
-        fontSize: 11,
+    sheetTitle: {
+        fontSize: 21,
         fontWeight: '800',
-        letterSpacing: 0.9,
-    },
-    heroTitle: {
-        color: palette.onDarkPrimary,
-        fontSize: 24,
-        fontWeight: '800',
-    },
-    heroDescription: {
-        color: palette.onDarkMuted,
-        fontSize: 14,
-        lineHeight: 21,
-    },
-    panel: {
-        backgroundColor: palette.cardBg,
-        borderRadius: radius.lg,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        padding: spacing.md,
-        gap: spacing.sm,
-        ...shadow.card,
-    },
-    sectionLabel: {
-        ...uiType.statLabel,
-        color: palette.textSecondary,
+        color: palette.textPrimary,
+        marginBottom: spacing.sm,
     },
     dropzone: {
         alignItems: 'center',
         gap: spacing.xs,
         paddingVertical: spacing.xl,
         paddingHorizontal: spacing.md,
-        borderRadius: radius.md,
-        borderWidth: 1,
+        borderRadius: radius.lg,
+        borderWidth: 1.5,
         borderStyle: 'dashed',
-        borderColor: palette.indigoBorder,
-        backgroundColor: palette.pageBg,
+        borderColor: palette.teal200,
+        backgroundColor: palette.primarySurface,
     },
     dropzoneIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: radius.md,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: palette.indigoSurface,
         marginBottom: spacing.xs,
     },
     dropzoneTitle: {
@@ -523,25 +482,45 @@ const styles = StyleSheet.create({
     },
     dropzoneFile: {
         ...uiType.small,
-        color: palette.indigo600,
+        color: palette.accent,
         fontWeight: '700',
         marginTop: spacing.xs,
         maxWidth: '100%',
     },
-    readyDataRow: {
+    statusRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: spacing.sm,
-        paddingVertical: spacing.xs,
+        paddingHorizontal: spacing.md,
+        paddingVertical: spacing.sm,
+        borderRadius: radius.md,
+        borderWidth: 1,
     },
-    readyDataText: {
+    statusRowProcessing: {
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.primarySurface,
+    },
+    statusRowSuccess: {
+        borderColor: palette.successBorder,
+        backgroundColor: palette.successSurface,
+    },
+    statusRowError: {
+        borderColor: palette.dangerBorder,
+        backgroundColor: palette.dangerSurface,
+    },
+    statusRowWarning: {
+        borderColor: palette.amber500,
+        backgroundColor: palette.amberSurface,
+    },
+    statusText: {
         flex: 1,
         ...uiType.small,
-        color: palette.textMuted,
+        color: palette.textSecondary,
     },
     fieldLabel: {
-        ...uiType.statLabel,
-        color: palette.textSecondary,
+        fontSize: 13,
+        fontWeight: '700',
+        color: palette.textPrimary,
         marginTop: spacing.sm,
     },
     input: {
@@ -549,111 +528,67 @@ const styles = StyleSheet.create({
         borderColor: palette.cardBorder,
         borderRadius: radius.md,
         paddingHorizontal: spacing.md,
-        paddingVertical: 11,
+        paddingVertical: 13,
         fontSize: 14,
         color: palette.textPrimary,
         backgroundColor: palette.cardBg,
     },
-    ghostButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: spacing.sm,
-        paddingVertical: 10,
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.indigoBorder,
-        backgroundColor: palette.indigoSurface,
-    },
-    ghostButtonText: {
-        color: palette.indigo600,
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    statusCard: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        padding: spacing.md,
-        gap: spacing.xs,
-    },
-    statusCardProcessing: {
-        borderColor: palette.indigoBorder,
-        backgroundColor: palette.indigoSurface,
-    },
-    statusCardSuccess: {
-        borderColor: palette.emerald500,
-        backgroundColor: palette.emeraldSurface,
-    },
-    statusCardError: {
-        borderColor: palette.error,
-        backgroundColor: '#fef2f2',
-    },
-    statusHeader: {
+    selectRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: spacing.sm,
     },
-    statusTitle: {
-        fontSize: 13,
-        fontWeight: '700',
+    selectValue: {
+        fontSize: 14,
         color: palette.textPrimary,
     },
-    statusDetail: {
-        ...uiType.small,
-        color: palette.textSecondary,
-        lineHeight: 17,
-    },
-    expectedBox: {
-        borderRadius: radius.md,
+    selectMenu: {
         borderWidth: 1,
         borderColor: palette.cardBorder,
-        backgroundColor: palette.pageBg,
-        padding: spacing.md,
-        gap: spacing.xs,
+        borderRadius: radius.md,
+        backgroundColor: palette.cardBg,
+        overflow: 'hidden',
     },
-    expectedTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: palette.textPrimary,
-    },
-    expectedText: {
-        ...uiType.small,
-        color: palette.textSecondary,
-        lineHeight: 17,
-    },
-    breakdownBox: {
-        gap: spacing.xs,
-    },
-    breakdownRow: {
+    selectOption: {
         flexDirection: 'row',
+        alignItems: 'center',
         justifyContent: 'space-between',
         gap: spacing.sm,
+        paddingHorizontal: spacing.md,
+        paddingVertical: 12,
     },
-    breakdownName: {
-        ...uiType.small,
-        color: palette.textSecondary,
-        flex: 1,
+    selectOptionPressed: {
+        backgroundColor: palette.primarySurface,
     },
-    breakdownCount: {
-        ...uiType.small,
-        color: palette.textMuted,
-        fontWeight: '600',
+    selectOptionText: {
+        fontSize: 14,
+        color: palette.textPrimary,
     },
     submitButton: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: spacing.sm,
-        marginTop: spacing.sm,
-        paddingVertical: 13,
-        borderRadius: radius.pill,
-        backgroundColor: palette.indigo600,
+        marginTop: spacing.lg,
+        paddingVertical: 15,
+        borderRadius: radius.md,
+        backgroundColor: palette.primary,
     },
     submitButtonText: {
         color: palette.onDarkPrimary,
         fontSize: 15,
         fontWeight: '700',
+    },
+    cancelButton: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 13,
+    },
+    cancelButtonText: {
+        color: palette.textMuted,
+        fontSize: 15,
+        fontWeight: '600',
     },
     pressed: {
         opacity: 0.75,
@@ -662,13 +597,15 @@ const styles = StyleSheet.create({
         opacity: 0.55,
     },
     infoText: {
-        color: palette.emerald500,
+        color: palette.success,
         fontSize: 13,
         lineHeight: 19,
+        marginTop: spacing.sm,
     },
     errorText: {
-        color: palette.error,
+        color: palette.danger,
         fontSize: 13,
         lineHeight: 19,
+        marginTop: spacing.sm,
     },
 });

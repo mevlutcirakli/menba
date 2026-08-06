@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
     ActivityIndicator,
     Alert,
@@ -14,6 +16,7 @@ import {
     View,
 } from 'react-native';
 import { AnimatedCard } from '../../src/components/AnimatedCard';
+import { ProgressRing } from '../../src/components/ProgressRing';
 import { SkeletonCard } from '../../src/components/SkeletonCard';
 import { useQuiz } from '../../src/hooks/useQuiz';
 import { supabase } from '../../src/services/supabase';
@@ -24,31 +27,34 @@ interface QuizUiSessionState {
     newTopicName: string;
 }
 
+interface TopicCounts {
+    questionCount: number;
+    solvedCount: number;
+}
+
 const quizUiStateBySource = new Map<string, QuizUiSessionState>();
 
 export default function QuizBySourceScreen() {
     const router = useRouter();
     const { sourceId } = useLocalSearchParams<{ sourceId: string }>();
-    const {
-        source,
-        topics,
-        recommendedTopicId,
-        isLoading,
-        error,
-        refresh,
-    } = useQuiz(sourceId);
+    const { source, topics, recommendedTopicId, isLoading, error, refresh } = useQuiz(sourceId);
     const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
     const [newTopicName, setNewTopicName] = useState('');
-    const [questionCountByTopicId, setQuestionCountByTopicId] = useState<Record<string, number>>({});
+    const [countsByTopicId, setCountsByTopicId] = useState<Record<string, TopicCounts>>({});
     const [flowNotice, setFlowNotice] = useState<string | null>(null);
     const [deletingTopicId, setDeletingTopicId] = useState<string | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const trimmedNewTopicName = newTopicName.trim();
 
-    const totalQuestionCount = useMemo(
-        () => Object.values(questionCountByTopicId).reduce((sum, count) => sum + count, 0),
-        [questionCountByTopicId]
-    );
+    const { totalQuestionCount, totalSolvedCount } = useMemo(() => {
+        let total = 0;
+        let solved = 0;
+        for (const counts of Object.values(countsByTopicId)) {
+            total += counts.questionCount;
+            solved += counts.solvedCount;
+        }
+        return { totalQuestionCount: total, totalSolvedCount: solved };
+    }, [countsByTopicId]);
 
     useEffect(() => {
         if (!sourceId) {
@@ -71,10 +77,7 @@ export default function QuizBySourceScreen() {
             return;
         }
 
-        quizUiStateBySource.set(sourceId, {
-            selectedTopicId,
-            newTopicName,
-        });
+        quizUiStateBySource.set(sourceId, { selectedTopicId, newTopicName });
     }, [newTopicName, selectedTopicId, sourceId]);
 
     useEffect(() => {
@@ -101,50 +104,107 @@ export default function QuizBySourceScreen() {
 
     useEffect(() => {
         if (topics.length === 0) {
-            setQuestionCountByTopicId({});
+            setCountsByTopicId({});
             return;
         }
 
         let cancelled = false;
-        const loadTopicQuestionCounts = async () => {
+
+        const loadTopicCounts = async () => {
             const topicIds = topics.map((topic) => topic.id);
-            const { data } = await supabase
+            const { data: questionRows } = await supabase
                 .from('questions')
-                .select('topic_id')
+                .select('id, topic_id')
                 .in('topic_id', topicIds);
 
             if (cancelled) {
                 return;
             }
 
-            const nextCounts: Record<string, number> = {};
+            const topicIdByQuestionId = new Map<string, string>();
+            const nextCounts: Record<string, TopicCounts> = {};
             for (const topic of topics) {
-                nextCounts[topic.id] = 0;
+                nextCounts[topic.id] = { questionCount: 0, solvedCount: 0 };
             }
 
-            for (const row of data ?? []) {
-                nextCounts[row.topic_id] = (nextCounts[row.topic_id] ?? 0) + 1;
+            for (const row of questionRows ?? []) {
+                topicIdByQuestionId.set(row.id, row.topic_id);
+                const bucket = nextCounts[row.topic_id];
+                if (bucket) {
+                    bucket.questionCount += 1;
+                }
             }
 
-            setQuestionCountByTopicId(nextCounts);
+            // Ayni soru birden fazla kez cevaplanmis olabilir; "cozuldu"
+            // sayisi benzersiz soru kimligi uzerinden hesaplaniyor.
+            const questionIds = Array.from(topicIdByQuestionId.keys());
+            if (questionIds.length > 0) {
+                const { data: logRows } = await supabase
+                    .from('question_logs')
+                    .select('question_id')
+                    .in('question_id', questionIds);
+
+                if (cancelled) {
+                    return;
+                }
+
+                const solvedQuestionIds = new Set(
+                    (logRows ?? []).map((row) => row.question_id)
+                );
+
+                for (const questionId of solvedQuestionIds) {
+                    const topicId = topicIdByQuestionId.get(questionId);
+                    if (!topicId) {
+                        continue;
+                    }
+
+                    const bucket = nextCounts[topicId];
+                    if (bucket) {
+                        bucket.solvedCount += 1;
+                    }
+                }
+            }
+
+            setCountsByTopicId(nextCounts);
         };
 
-        void loadTopicQuestionCounts();
+        void loadTopicCounts();
 
         return () => {
             cancelled = true;
         };
     }, [topics]);
 
-    // Bu ekran test baslatmaz; tek istisna yeni konu, cunku konu ancak akis
-    // sayfasi acilirken olusturulup ilk sorusu uretiliyor.
+    // Mevcut bir konuya basinca dogrudan soru akisi acilir. Test uzunlugu
+    // konudaki hazir soru sayisi kadar; banka bossa play ekrani kendi
+    // varsayilaniyla yeni soru uretir.
+    const handleStartTopic = (topicId: string) => {
+        if (!sourceId) {
+            return;
+        }
+
+        setSelectedTopicId(topicId);
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+        router.push({
+            pathname: '/quiz/[sourceId]/play',
+            params: {
+                sourceId,
+                topicId,
+                count: String(countsByTopicId[topicId]?.questionCount ?? 0),
+            },
+        });
+    };
+
+    // Bu ekran disinda test baslatmaz; tek istisna yeni konu, cunku konu
+    // ancak akis sayfasi acilirken olusturulup ilk sorusu uretiliyor.
     const handleOpenFlowForNewTopic = () => {
         if (!sourceId) {
             return;
         }
 
         if (!trimmedNewTopicName) {
-            setFlowNotice('Yeni konu olusturmak icin once konu adini yaz.');
+            setFlowNotice('Yeni konu oluşturmak için önce konu adını yaz.');
             return;
         }
 
@@ -185,15 +245,15 @@ export default function QuizBySourceScreen() {
     };
 
     const handleDeleteTopic = (topicId: string, topicName: string) => {
-        const questionCount = questionCountByTopicId[topicId] ?? 0;
+        const questionCount = countsByTopicId[topicId]?.questionCount ?? 0;
 
         Alert.alert(
             'Konu silinsin mi?',
             questionCount > 0
-                ? `"${topicName}" konusu ve icindeki ${questionCount} soru kalici olarak silinecek. Bu konudaki test gecmisin de gider.`
-                : `"${topicName}" konusu kalici olarak silinecek.`,
+                ? `"${topicName}" konusu ve içindeki ${questionCount} soru kalıcı olarak silinecek. Bu konudaki test geçmişin de gider.`
+                : `"${topicName}" konusu kalıcı olarak silinecek.`,
             [
-                { text: 'Vazgec', style: 'cancel' },
+                { text: 'Vazgeç', style: 'cancel' },
                 {
                     text: 'Sil',
                     style: 'destructive',
@@ -207,28 +267,34 @@ export default function QuizBySourceScreen() {
 
     if (isLoading) {
         return (
-            <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>Konu Yonetimi</Text>
-                <View style={[styles.card, styles.stateCard]}>
+            <View style={styles.screen}>
+                <StatusBar style="dark" />
+                <View style={styles.stateWrap}>
                     <SkeletonCard height={92} />
-                    <Text style={styles.description}>Konular yukleniyor...</Text>
+                    <Text style={styles.stateText}>Konular yükleniyor...</Text>
                 </View>
-            </ScrollView>
+            </View>
         );
     }
 
     if (error) {
         return (
-            <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>Konu Yonetimi</Text>
-                <View style={[styles.card, styles.errorCard]}>
-                    <Text style={styles.errorTitle}>Konular acilamadi</Text>
-                    <Text style={styles.error}>{error}</Text>
-                    <Link href="/(tabs)" style={styles.stateLinkButton}>
-                        Kaynaklara Don
-                    </Link>
+            <View style={styles.screen}>
+                <StatusBar style="dark" />
+                <View style={styles.stateWrap}>
+                    <Text style={styles.errorTitle}>Konular açılamadı</Text>
+                    <Text style={styles.errorText}>{error}</Text>
+                    <Pressable
+                        onPress={() => router.push('/(tabs)/sources')}
+                        style={({ pressed }) => [
+                            styles.primaryButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Text style={styles.primaryButtonText}>Kaynaklara Dön</Text>
+                    </Pressable>
                 </View>
-            </ScrollView>
+            </View>
         );
     }
 
@@ -237,309 +303,310 @@ export default function QuizBySourceScreen() {
         // KeyboardAvoidingView icerigi yukari itiyor, ScrollView de odaklanan
         // alani gorunur tutuyor.
         <KeyboardAvoidingView
-            style={styles.flex}
+            style={styles.screen}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-        <ScrollView
-            contentContainerStyle={styles.container}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            automaticallyAdjustKeyboardInsets
-        >
-            <Text style={styles.title}>Konu Yonetimi</Text>
-            <View style={styles.stickyHeader}>
-                <Text style={styles.stickyHeaderTitle}>{source?.title ?? 'Kaynak yukleniyor'}</Text>
-                <Text style={styles.stickyHeaderMeta}>
-                    {topics.length} konu · {totalQuestionCount} soru
-                </Text>
-            </View>
+            <StatusBar style="dark" />
 
-            <AnimatedCard style={styles.card} delayMs={30} resetKey={`topics-${sourceId}`}>
+            <ScrollView
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                automaticallyAdjustKeyboardInsets
+            >
+                <View style={styles.summaryCard}>
+                    <View style={styles.summaryText}>
+                        <Text style={styles.summaryTitle} numberOfLines={2}>
+                            {source?.title ?? 'Kaynak yükleniyor'}
+                        </Text>
+                        <Text style={styles.summaryMeta}>
+                            {topics.length} konu • {totalQuestionCount} soru
+                        </Text>
+                    </View>
+
+                    <ProgressRing
+                        value={
+                            totalQuestionCount === 0
+                                ? 0
+                                : Math.round((totalSolvedCount / totalQuestionCount) * 100)
+                        }
+                    />
+                </View>
+
                 <Text style={styles.sectionTitle}>Konular</Text>
-                <Text style={styles.helperText}>
-                    Yalnizca &quot;Yeni Konu&quot; akisindan elle ekledigin konular
-                    silinebilir; kaynaktan cikarilanlar kaynagin kendisiyle birlikte
-                    silinir. Test baslatmak icin asagidan bir konu sec.
-                </Text>
 
                 {topics.length === 0 ? (
-                    <Text style={styles.description}>
-                        Bu kaynaga ait konu yok. Asagidan yeni konu adi girip soru
-                        uretebilirsin.
+                    <Text style={styles.emptyText}>
+                        Bu kaynağa ait konu yok. Aşağıdan yeni konu adı girip soru
+                        üretebilirsin.
                     </Text>
                 ) : (
-                    topics.map((topic) => {
-                        const questionCount = questionCountByTopicId[topic.id] ?? 0;
+                    topics.map((topic, index) => {
+                        const counts = countsByTopicId[topic.id];
+                        const questionCount = counts?.questionCount ?? 0;
+                        const solvedCount = counts?.solvedCount ?? 0;
                         const isDeleting = deletingTopicId === topic.id;
                         // Kaynaktan cikarilan konular silinmez; yalnizca "Yeni
                         // Konu" akisindan elle eklenenler kaldirilabilir.
                         const canDelete = topic.origin === 'manual';
 
                         return (
-                            <View key={topic.id} style={styles.topicRow}>
-                                <View style={styles.topicRowText}>
-                                    <Text style={styles.topicRowName} numberOfLines={2}>
-                                        {topic.name}
-                                    </Text>
-                                    <Text style={styles.topicRowMeta}>
-                                        {questionCount} soru
-                                        {canDelete ? ' · elle eklendi' : ''}
-                                    </Text>
-                                </View>
+                            <AnimatedCard
+                                key={topic.id}
+                                delayMs={Math.min(200, index * 35)}
+                                resetKey={topic.id}
+                            >
+                                <Pressable
+                                    onPress={() => handleStartTopic(topic.id)}
+                                    disabled={isDeleting}
+                                    style={({ pressed }) => [
+                                        styles.topicCard,
+                                        pressed ? styles.topicCardPressed : null,
+                                        isDeleting ? styles.disabled : null,
+                                    ]}
+                                >
+                                    <View style={styles.topicText}>
+                                        <Text style={styles.topicName} numberOfLines={2}>
+                                            {topic.name}
+                                        </Text>
+                                        <Text style={styles.topicMeta}>
+                                            {questionCount} soru • {solvedCount} çözüldü
+                                            {canDelete ? ' • elle eklendi' : ''}
+                                        </Text>
+                                    </View>
 
-                                {canDelete ? (
-                                    <Pressable
-                                        onPress={() => handleDeleteTopic(topic.id, topic.name)}
-                                        disabled={isDeleting}
-                                        style={({ pressed }) => [
-                                            styles.iconButton,
-                                            styles.iconButtonDanger,
-                                            pressed ? styles.pressed : null,
-                                        ]}
-                                    >
-                                        {isDeleting ? (
-                                            <ActivityIndicator
-                                                size="small"
-                                                color={palette.error}
-                                            />
-                                        ) : (
-                                            <Ionicons
-                                                name="trash-outline"
-                                                size={15}
-                                                color={palette.error}
-                                            />
-                                        )}
-                                    </Pressable>
-                                ) : null}
-                            </View>
+                                    <ProgressRing
+                                        value={
+                                            questionCount === 0
+                                                ? 0
+                                                : Math.round(
+                                                      (solvedCount / questionCount) * 100
+                                                  )
+                                        }
+                                        size={40}
+                                    />
+
+                                    {canDelete ? (
+                                        <Pressable
+                                            onPress={() =>
+                                                handleDeleteTopic(topic.id, topic.name)
+                                            }
+                                            disabled={isDeleting}
+                                            style={({ pressed }) => [
+                                                styles.deleteButton,
+                                                pressed ? styles.deleteButtonPressed : null,
+                                            ]}
+                                            hitSlop={8}
+                                        >
+                                            {isDeleting ? (
+                                                <ActivityIndicator
+                                                    size="small"
+                                                    color={palette.danger}
+                                                />
+                                            ) : (
+                                                <Ionicons
+                                                    name="trash-outline"
+                                                    size={16}
+                                                    color={palette.textMuted}
+                                                />
+                                            )}
+                                        </Pressable>
+                                    ) : null}
+                                </Pressable>
+                            </AnimatedCard>
                         );
                     })
                 )}
 
-                {deleteError ? <Text style={styles.error}>{deleteError}</Text> : null}
-            </AnimatedCard>
+                {deleteError ? <Text style={styles.errorText}>{deleteError}</Text> : null}
 
-            <AnimatedCard style={styles.card} delayMs={60} resetKey={`new-topic-${sourceId}`}>
                 <Text style={styles.sectionTitle}>Yeni Konu</Text>
 
-                <TextInput
-                    value={newTopicName}
-                    onChangeText={setNewTopicName}
-                    placeholder="Yeni konu adi (ornek: Phrasal Verbs)"
-                    placeholderTextColor={palette.textMuted}
-                    style={styles.input}
-                />
+                <View style={styles.newTopicCard}>
+                    <TextInput
+                        value={newTopicName}
+                        onChangeText={setNewTopicName}
+                        placeholder="Örn: Phrasal Verbs"
+                        placeholderTextColor={palette.textMuted}
+                        style={styles.input}
+                    />
 
-                <Pressable
-                    onPress={() => {
-                        handleOpenFlowForNewTopic();
-                    }}
-                    disabled={isLoading}
-                    style={[
-                        styles.button,
-                        isLoading || !trimmedNewTopicName ? styles.buttonDisabled : null,
-                    ]}
-                >
-                    <Text style={styles.buttonText}>Bu Konuda Soru Uret</Text>
-                </Pressable>
+                    <Pressable
+                        onPress={handleOpenFlowForNewTopic}
+                        style={({ pressed }) => [
+                            styles.primaryButton,
+                            pressed ? styles.pressed : null,
+                            !trimmedNewTopicName ? styles.disabled : null,
+                        ]}
+                    >
+                        <Ionicons name="sparkles" size={15} color={palette.onDarkPrimary} />
+                        <Text style={styles.primaryButtonText}>Bu Konuda Soru Üret</Text>
+                    </Pressable>
 
-                {/* Konu adi bosken buton pasif gorunur; yine de basilabilir ve
-                    ne yapmasi gerektigini soyleyen yumusak uyari cikar. */}
-                {!trimmedNewTopicName && !flowNotice ? (
-                    <View style={styles.softHintRow}>
-                        <Ionicons
-                            name="information-circle-outline"
-                            size={14}
-                            color={palette.textMuted}
-                        />
-                        <Text style={styles.softHintText}>
-                            Once yukaridaki kutuya konu adi yaz; konu, akis sayfasi acilirken
-                            olusturulur.
+                    {/* Konu adi bosken buton pasif gorunur; yine de basilabilir
+                        ve ne yapmasi gerektigini soyleyen yumusak uyari cikar. */}
+                    {!trimmedNewTopicName && !flowNotice ? (
+                        <Text style={styles.hintText}>
+                            Konu, akış sayfası açılırken oluşturulur.
                         </Text>
-                    </View>
-                ) : null}
+                    ) : null}
 
-                {flowNotice ? <Text style={styles.flowNoticeText}>{flowNotice}</Text> : null}
-            </AnimatedCard>
-
-            <Link href="/(tabs)/sources" style={styles.stateLinkButton}>
-                Kaynak Listesine Don
-            </Link>
-        </ScrollView>
+                    {flowNotice ? <Text style={styles.noticeText}>{flowNotice}</Text> : null}
+                </View>
+            </ScrollView>
         </KeyboardAvoidingView>
     );
 }
 
 const styles = StyleSheet.create({
-    flex: {
+    screen: {
         flex: 1,
-        backgroundColor: palette.cardBg,
+        backgroundColor: palette.pageBg,
     },
     container: {
         padding: spacing.lg,
-        gap: 12,
+        gap: spacing.sm,
         // Klavye acikken son kart ve buton icin nefes payi.
         paddingBottom: spacing.xl * 2,
-        backgroundColor: palette.cardBg,
     },
-    title: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: palette.textPrimary,
-    },
-    stickyHeader: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.md,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 3,
-        backgroundColor: palette.indigoSurface,
-    },
-    stickyHeaderTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: palette.textPrimary,
-    },
-    stickyHeaderMeta: {
-        fontSize: 12,
-        color: palette.indigo600,
-    },
-    description: {
-        fontSize: 16,
-        color: palette.textSecondary,
-        lineHeight: 24,
-    },
-    card: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.md,
-        padding: spacing.md,
-        gap: 10,
-        backgroundColor: palette.cardBg,
-    },
-    sectionTitle: {
-        ...uiType.heading,
-        color: palette.textPrimary,
-    },
-    helperText: {
-        fontSize: 12,
-        lineHeight: 17,
-        color: palette.textMuted,
-    },
-    topicRow: {
+    summaryCard: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: spacing.md,
+        padding: spacing.md,
+        borderRadius: radius.lg,
         borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.md,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        backgroundColor: palette.cardBg,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.primarySurface,
     },
-    topicRowText: {
+    summaryText: {
         flex: 1,
     },
-    topicRowName: {
-        fontSize: 14,
+    summaryTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: palette.textPrimary,
+    },
+    summaryMeta: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        marginTop: 3,
+    },
+    sectionTitle: {
+        ...uiType.sectionTitle,
+        color: palette.textPrimary,
+        marginTop: spacing.md,
+        marginBottom: spacing.xs,
+    },
+    topicCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.md,
+        padding: spacing.md,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        backgroundColor: palette.cardBg,
+    },
+    topicCardPressed: {
+        backgroundColor: palette.primarySurface,
+    },
+    topicText: {
+        flex: 1,
+    },
+    topicName: {
+        fontSize: 15,
         fontWeight: '700',
         color: palette.textPrimary,
     },
-    topicRowMeta: {
-        fontSize: 12,
+    topicMeta: {
+        ...uiType.small,
         color: palette.textMuted,
-        marginTop: 2,
+        marginTop: 3,
     },
-    iconButton: {
+    deleteButton: {
         width: 34,
         height: 34,
         borderRadius: radius.md,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    deleteButtonPressed: {
+        backgroundColor: palette.dangerSurface,
+    },
+    newTopicCard: {
+        gap: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.lg,
         borderWidth: 1,
-    },
-    iconButtonDanger: {
-        borderColor: palette.error,
+        borderColor: palette.cardBorder,
         backgroundColor: palette.cardBg,
-    },
-    pressed: {
-        opacity: 0.8,
     },
     input: {
         borderWidth: 1,
         borderColor: palette.cardBorder,
         borderRadius: radius.md,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 15,
+        paddingHorizontal: spacing.md,
+        paddingVertical: 12,
+        fontSize: 14,
         color: palette.textPrimary,
         backgroundColor: palette.cardBg,
     },
-    button: {
-        backgroundColor: palette.indigo600,
-        borderRadius: radius.md,
-        paddingVertical: 12,
+    primaryButton: {
+        flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'center',
+        gap: spacing.sm,
+        paddingVertical: 14,
+        borderRadius: radius.md,
+        backgroundColor: palette.primary,
     },
-    buttonDisabled: {
-        opacity: 0.7,
-    },
-    buttonText: {
-        color: palette.cardBg,
+    primaryButtonText: {
+        color: palette.onDarkPrimary,
         fontSize: 15,
         fontWeight: '700',
     },
-    error: {
-        color: palette.error,
-        fontSize: 14,
-    },
-    errorTitle: {
-        color: palette.error,
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    errorCard: {
-        borderColor: palette.error,
-        backgroundColor: '#fef2f2',
-    },
-    stateCard: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 120,
-    },
-    stateLinkButton: {
-        marginTop: 4,
-        alignSelf: 'flex-start',
-        backgroundColor: palette.indigo600,
-        color: palette.cardBg,
-        borderRadius: radius.md,
-        overflow: 'hidden',
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        fontSize: 14,
-        fontWeight: '700',
-    },
-    softHintRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 2,
-    },
-    softHintText: {
-        flex: 1,
-        fontSize: 12,
-        lineHeight: 17,
+    hintText: {
+        ...uiType.small,
         color: palette.textMuted,
+        textAlign: 'center',
     },
-    flowNoticeText: {
-        fontSize: 13,
+    noticeText: {
+        ...uiType.small,
         color: palette.textPrimary,
-        backgroundColor: palette.indigoSurface,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
+        backgroundColor: palette.primarySurface,
         borderRadius: radius.sm,
         paddingHorizontal: 10,
         paddingVertical: 8,
+    },
+    emptyText: {
+        ...uiType.body,
+        color: palette.textMuted,
+    },
+    stateWrap: {
+        gap: spacing.sm,
+        padding: spacing.lg,
+    },
+    stateText: {
+        ...uiType.body,
+        color: palette.textMuted,
+        textAlign: 'center',
+    },
+    errorTitle: {
+        color: palette.danger,
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    errorText: {
+        color: palette.danger,
+        fontSize: 13,
+        lineHeight: 19,
+    },
+    pressed: {
+        opacity: 0.75,
+    },
+    disabled: {
+        opacity: 0.55,
     },
 });

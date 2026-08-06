@@ -1,43 +1,80 @@
-// AI Studio web surumunun tasarim dili. Tum ekranlar bu tek sisteme tasindi;
-// eski `colors`/`typography` ikilisi kaldirildi (bkz. git tarihi).
+// Figma tasarim sistemi (2026-08). Onceki indigo/navy paleti kaldirildi;
+// marka rengi koyu teal. Eski anahtarlar (indigo600, navy900, emerald500...)
+// asagida yeni degerlere isaret eden takma adlar olarak duruyor, boylece
+// heniz elden gecmemis ekranlar da dogru renkleri aliyor.
+const teal = {
+    900: '#0B3A34',
+    800: '#0F5C52',
+    700: '#12766A',
+    600: '#179B8A',
+    200: '#BBDDD7',
+    100: '#D8EAE6',
+    50: '#EDF5F3',
+} as const;
+
 export const palette = {
-    // Koyu marka yuzeyleri (ust bar, hero kartlar)
-    navy900: '#0f172a',
-    navy800: '#1e293b',
-    navy700: '#334155',
+    // --- Marka olcegi ---
+    teal900: teal[900],
+    teal800: teal[800],
+    teal700: teal[700],
+    teal600: teal[600],
+    teal200: teal[200],
+    teal100: teal[100],
+    teal50: teal[50],
 
-    // Birincil vurgu
-    indigo600: '#4f46e5',
-    indigo500: '#6366f1',
-    indigo300: '#a5b4fc',
-    indigoSurface: '#eef2ff',
-    indigoBorder: '#c7d2fe',
+    /** Birincil buton / aktif sekme zemini. */
+    primary: teal[800],
+    /** Ilerleme dolgusu, halka, ikon vurgusu. */
+    accent: teal[700],
+    /** Acik marka yuzeyi (rozet, dropzone, aciklama kutusu). */
+    primarySurface: teal[50],
+    primaryBorder: teal[100],
 
-    // Ikincil vurgular
-    emerald500: '#10b981',
-    emeraldSurface: '#ecfdf5',
-    amber500: '#f59e0b',
-    amber600: '#d97706',
-    amberSurface: '#fffbeb',
+    // --- Durum renkleri ---
+    success: '#12866F',
+    successSurface: '#E9F6F1',
+    successBorder: '#9FD6C6',
+    danger: '#E5484D',
+    dangerSurface: '#FEF1F1',
+    dangerBorder: '#F3B6B8',
 
-    // Notr olcek
-    pageBg: '#f8fafc',
-    cardBg: '#ffffff',
-    cardBorder: '#e2e8f0',
-    textPrimary: '#0f172a',
-    textSecondary: '#475569',
-    textMuted: '#94a3b8',
-    onDarkPrimary: '#ffffff',
-    onDarkMuted: '#94a3b8',
+    // --- Notr olcek ---
+    pageBg: '#F8FBFA',
+    cardBg: '#FFFFFF',
+    cardBorder: '#E4EDEB',
+    /** Ic kutular (soru govdesi, secili olmayan alanlar). */
+    subtleBg: '#F1F6F5',
+    textPrimary: '#123330',
+    textSecondary: '#52706B',
+    textMuted: '#8AA09B',
+    onDarkPrimary: '#FFFFFF',
+    onDarkMuted: '#B9D2CD',
 
-    error: '#b91c1c',
+    /** Avatar / dekoratif dolgular. */
+    avatarPeach: '#F3D2AC',
+    /** Modal arkasindaki karartma. */
+    scrim: 'rgba(11, 58, 52, 0.45)',
+
+    // --- Eski anahtarlar (geriye donuk uyumluluk) ---
+    navy900: teal[900],
+    navy800: teal[800],
+    navy700: teal[700],
+    indigo600: teal[700],
+    indigo500: teal[600],
+    indigo300: teal[200],
+    indigoSurface: teal[50],
+    indigoBorder: teal[100],
+    emerald500: '#12866F',
+    emeraldSurface: '#E9F6F1',
+    amber500: '#C98A2E',
+    amber600: '#A9711F',
+    amberSurface: '#FBF3E7',
+    error: '#E5484D',
 } as const;
 
 export const gradients = {
-    // Logo rozeti: indigo -> emerald capraz gecis
-    brand: ['#4f46e5', '#6366f1', '#34d399'] as const,
-    // Koyu hero kart zemini
-    hero: ['#1e1b4b', '#0f172a'] as const,
+    brand: [teal[700], teal[800]] as const,
+    hero: [teal[800], teal[900]] as const,
 };
 
 // Baslik/font ailesi: Manrope yuklendiginde bu isimler kullanilabilir hale
@@ -50,17 +87,17 @@ export const fontFamily = {
 };
 
 export const uiType = {
-    pageTitle: { fontSize: 26, fontWeight: '800' as const, fontFamily: fontFamily.heading },
-    cardTitle: { fontSize: 17, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
-    statLabel: {
-        fontSize: 11,
-        fontWeight: '700' as const,
-        letterSpacing: 0.8,
-    },
-    statValue: { fontSize: 28, fontWeight: '800' as const, fontFamily: fontFamily.heading },
+    /** Ekran basligi: "Kaynaklarim", "Merhaba, Elif". */
+    pageTitle: { fontSize: 28, fontWeight: '800' as const, fontFamily: fontFamily.heading },
+    cardTitle: { fontSize: 16, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
+    /** Kart ustu kucuk buyuk-harf etiket. */
+    statLabel: { fontSize: 11, fontWeight: '700' as const, letterSpacing: 0.6 },
+    /** Buyuk sayi: "847", "%78". */
+    statValue: { fontSize: 26, fontWeight: '800' as const, fontFamily: fontFamily.heading },
+    /** Bolum basligi: "Son Aktiviteler". */
+    sectionTitle: { fontSize: 16, fontWeight: '800' as const, fontFamily: fontFamily.headingSemibold },
     body: { fontSize: 14, lineHeight: 20 },
-    small: { fontSize: 12 },
-    // Eski `typography` setinden tasindi (bkz. quiz akisi ekranlari).
+    small: { fontSize: 12, lineHeight: 17 },
     title: { fontSize: 26, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
     heading: { fontSize: 16, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
     caption: { fontSize: 12, fontWeight: '700' as const },
@@ -70,7 +107,9 @@ export const radius = {
     sm: 8,
     md: 12,
     lg: 16,
-    xl: 18,
+    xl: 20,
+    /** Bottom sheet ust koseleri. */
+    sheet: 26,
     pill: 999,
 };
 
@@ -82,21 +121,21 @@ export const spacing = {
     xl: 28,
 };
 
-// Duz kenarlikli kartlara derinlik katmak icin. iOS golge + Android
-// elevation ayni obje icinde; kart stiline ...shadow.card seklinde acilir.
+// Tasarimda kartlar golgeden cok ince kenarlikla ayriliyor; golge yalnizca
+// yuzen yuzeylerde (bottom sheet, tab bar) kullaniliyor.
 export const shadow = {
     card: {
-        shadowColor: '#0f172a',
-        shadowOpacity: 0.06,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 2,
+        shadowColor: teal[900],
+        shadowOpacity: 0.04,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 1,
     },
     raised: {
-        shadowColor: '#0f172a',
-        shadowOpacity: 0.1,
-        shadowRadius: 20,
-        shadowOffset: { width: 0, height: 8 },
-        elevation: 6,
+        shadowColor: teal[900],
+        shadowOpacity: 0.12,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: -4 },
+        elevation: 12,
     },
 };

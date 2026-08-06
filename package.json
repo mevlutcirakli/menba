@@ -12,16 +12,16 @@
     "build:all:preview": "eas build --platform all --profile preview"
   },
   "dependencies": {
+    "@expo-google-fonts/manrope": "^0.4.1",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "^2.2.0",
-    "@expo-google-fonts/manrope": "^0.4.1",
     "@supabase/supabase-js": "^2.111.0",
     "expo": "~54.0.35",
-    "expo-haptics": "~15.0.7",
     "expo-constants": "~18.0.13",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.23",
     "expo-font": "~14.0.12",
+    "expo-haptics": "~15.0.7",
     "expo-linear-gradient": "~15.0.8",
     "expo-linking": "~8.0.12",
     "expo-router": "~6.0.24",
@@ -29,7 +29,8 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0"
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",

@@ -120,13 +120,13 @@ const styles = StyleSheet.create({
         backgroundColor: palette.cardBg,
     },
     error: {
-        color: palette.error,
+        color: palette.danger,
         fontSize: 14,
     },
     primaryButton: {
         marginTop: 6,
         borderRadius: radius.md,
-        backgroundColor: palette.indigo600,
+        backgroundColor: palette.primary,
         paddingVertical: 12,
         alignItems: 'center',
     },
@@ -138,12 +138,12 @@ const styles = StyleSheet.create({
     secondaryButton: {
         borderRadius: radius.md,
         borderWidth: 1,
-        borderColor: palette.indigo600,
+        borderColor: palette.primary,
         paddingVertical: 12,
         alignItems: 'center',
     },
     secondaryButtonText: {
-        color: palette.indigo600,
+        color: palette.primary,
         fontSize: 15,
         fontWeight: '700',
     },

@@ -139,6 +139,15 @@ const CONTENT_CHUNK_SIZE = 10000;
 const CONTENT_CHUNK_OVERLAP = 800;
 const MAX_CONTENT_CHUNKS = 8;
 
+/**
+ * Soru cikariminda gercekten islenen en fazla karakter sayisi. Ilk parca tam
+ * boyunda, sonrakiler ust uste bindigi icin her biri (boyut - binme) kadar
+ * ilerletiyor. Bunun otesindeki metin sessizce dusuyor; ekranlar kullaniciyi
+ * uyarabilsin diye disari aciliyor.
+ */
+export const MAX_PROCESSED_CONTENT_CHARS =
+    CONTENT_CHUNK_SIZE + (MAX_CONTENT_CHUNKS - 1) * (CONTENT_CHUNK_SIZE - CONTENT_CHUNK_OVERLAP);
+
 function splitContentIntoChunks(text: string): string[] {
     if (text.length <= CONTENT_CHUNK_SIZE) {
         return [text];
