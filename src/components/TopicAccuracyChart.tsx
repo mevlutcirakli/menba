@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { palette, radius, spacing, uiType } from '../theme/tokens';
 
 interface TopicAccuracyItem {
@@ -8,72 +8,44 @@ interface TopicAccuracyItem {
 
 interface TopicAccuracyChartProps {
     items: TopicAccuracyItem[];
+    /** Tasarimda kart en fazla 5 satir gosteriyor. */
+    maxRows?: number;
 }
 
-const PLOT_HEIGHT = 170;
-const BAR_SLOT_WIDTH = 64;
-const GRID_LINES = [100, 75, 50, 25, 0];
+/**
+ * "Konu Bazli Basari" karti: her satirda konu adi, yatay bar ve yuzde.
+ * Bar dolgusu tek renk; tasarimda basari seviyesine gore renk degismiyor.
+ */
+export function TopicAccuracyChart({ items, maxRows = 5 }: TopicAccuracyChartProps) {
+    const rows = items.slice(0, maxRows);
 
-export function TopicAccuracyChart({ items }: TopicAccuracyChartProps) {
     return (
         <View style={styles.card}>
-            <View style={styles.header}>
-                <Text style={styles.title}>Konu Bazlı Ustalık Dereceleri</Text>
-                <Text style={styles.headerHint}>Başarı Oranı (%)</Text>
-            </View>
+            <Text style={styles.title}>Konu Bazlı Başarı</Text>
 
-            {items.length === 0 ? (
+            {rows.length === 0 ? (
                 <Text style={styles.empty}>
-                    Henüz veri yok. İlk testini çözdüğünde buraya konu bazlı başarı
-                    grafiğin gelecek.
+                    Henüz soru çözmedin. İlk testini tamamlayınca konu başarın burada
+                    görünecek.
                 </Text>
             ) : (
-                <View style={styles.plotRow}>
-                    {/* Y ekseni: sabit, yatay kaydirmaya dahil degil */}
-                    <View style={styles.yAxis}>
-                        {GRID_LINES.map((value) => (
-                            <Text key={value} style={styles.yLabel}>
-                                {value}
+                rows.map((item) => {
+                    const ratio = Math.max(0, Math.min(1, item.accuracy / 100));
+
+                    return (
+                        <View key={item.topicName} style={styles.row}>
+                            <Text style={styles.name} numberOfLines={1}>
+                                {item.topicName}
                             </Text>
-                        ))}
-                    </View>
 
-                    <View style={styles.plotArea}>
-                        {/* Izgara cizgileri barlarin arkasinda */}
-                        <View style={styles.gridLayer} pointerEvents="none">
-                            {GRID_LINES.map((value) => (
-                                <View key={value} style={styles.gridLine} />
-                            ))}
+                            <View style={styles.track}>
+                                <View style={[styles.fill, { width: `${ratio * 100}%` }]} />
+                            </View>
+
+                            <Text style={styles.value}>%{Math.round(item.accuracy)}</Text>
                         </View>
-
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={styles.barsRow}
-                        >
-                            {items.map((item) => {
-                                const clamped = Math.min(100, Math.max(0, item.accuracy));
-
-                                return (
-                                    <View key={item.topicName} style={styles.barSlot}>
-                                        <View style={styles.barTrack}>
-                                            <View
-                                                style={[
-                                                    styles.bar,
-                                                    // Sifir dogruluk da gorunur kalsin diye alt sinir
-                                                    { height: Math.max(2, (clamped / 100) * PLOT_HEIGHT) },
-                                                ]}
-                                            />
-                                        </View>
-                                        <Text style={styles.barLabel} numberOfLines={1}>
-                                            {item.topicName}
-                                        </Text>
-                                    </View>
-                                );
-                            })}
-                        </ScrollView>
-                    </View>
-                </View>
+                    );
+                })
             )}
         </View>
     );
@@ -81,87 +53,49 @@ export function TopicAccuracyChart({ items }: TopicAccuracyChartProps) {
 
 const styles = StyleSheet.create({
     card: {
+        gap: spacing.md,
+        padding: spacing.md,
         backgroundColor: palette.cardBg,
         borderRadius: radius.lg,
         borderWidth: 1,
         borderColor: palette.cardBorder,
-        padding: spacing.md,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: spacing.sm,
-        marginBottom: spacing.lg,
     },
     title: {
-        ...uiType.cardTitle,
+        ...uiType.sectionTitle,
         color: palette.textPrimary,
-        flexShrink: 1,
     },
-    headerHint: {
-        ...uiType.small,
-        color: palette.textMuted,
-    },
-    plotRow: {
+    row: {
         flexDirection: 'row',
-        gap: spacing.sm,
-    },
-    yAxis: {
-        height: PLOT_HEIGHT,
-        justifyContent: 'space-between',
-        alignItems: 'flex-end',
-        width: 26,
-    },
-    yLabel: {
-        ...uiType.small,
-        color: palette.textMuted,
-        // Etiketi ilgili izgara cizgisiyle ortalamak icin yariyi yukari al
-        lineHeight: 12,
-        marginTop: -6,
-    },
-    plotArea: {
-        flex: 1,
-        height: PLOT_HEIGHT + 24,
-    },
-    gridLayer: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: 0,
-        height: PLOT_HEIGHT,
-        justifyContent: 'space-between',
-    },
-    gridLine: {
-        height: 1,
-        backgroundColor: palette.cardBorder,
-    },
-    barsRow: {
-        alignItems: 'flex-end',
-        gap: spacing.sm,
-    },
-    barSlot: {
-        width: BAR_SLOT_WIDTH,
         alignItems: 'center',
+        gap: spacing.sm,
     },
-    barTrack: {
-        height: PLOT_HEIGHT,
-        justifyContent: 'flex-end',
-    },
-    bar: {
-        width: 26,
-        backgroundColor: palette.indigo600,
-        borderTopLeftRadius: radius.sm,
-        borderTopRightRadius: radius.sm,
-    },
-    barLabel: {
+    name: {
+        // Sabit genislik: barlar satirlar arasinda ayni yerden baslasin.
+        width: 92,
         ...uiType.small,
-        color: palette.textMuted,
-        marginTop: spacing.sm,
-        textAlign: 'center',
+        color: palette.textSecondary,
+    },
+    track: {
+        flex: 1,
+        height: 7,
+        borderRadius: radius.pill,
+        backgroundColor: palette.teal50,
+        overflow: 'hidden',
+    },
+    fill: {
+        height: '100%',
+        borderRadius: radius.pill,
+        backgroundColor: palette.accent,
+    },
+    value: {
+        width: 38,
+        textAlign: 'right',
+        ...uiType.small,
+        fontWeight: '700',
+        color: palette.textSecondary,
     },
     empty: {
-        ...uiType.body,
-        color: palette.textSecondary,
+        ...uiType.small,
+        color: palette.textMuted,
     },
 });

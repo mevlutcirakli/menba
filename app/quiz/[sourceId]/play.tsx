@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import {
     ActivityIndicator,
     Pressable,
@@ -8,6 +9,7 @@ import {
     Text,
     View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AnimatedCard } from '../../../src/components/AnimatedCard';
 import { QuestionCard } from '../../../src/components/QuestionCard';
@@ -26,6 +28,7 @@ function formatElapsed(totalSeconds: number): string {
 
 export default function QuizPlayScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { sourceId, topicId, topicName, count } = useLocalSearchParams<{
         sourceId: string;
         topicId?: string;
@@ -37,7 +40,7 @@ export default function QuizPlayScreen() {
     const initialTopicName = typeof topicName === 'string' ? topicName.trim() : '';
 
     // Test uzunlugu = secilen konudaki (ya da tum kaynaktaki) hazir soru
-    // sayisi. Test Coz ekranindan parametre olarak geliyor; ust sinir yok,
+    // sayisi. Konu ekranindan parametre olarak geliyor; ust sinir yok,
     // amac bankadaki sorularin tamamini cozdurmek.
     const sessionQuestionCount = useMemo(() => {
         const parsed = Number(count);
@@ -47,7 +50,6 @@ export default function QuizPlayScreen() {
     }, [count]);
 
     const {
-        source,
         topics,
         currentQuestion,
         activeTopic,
@@ -250,187 +252,167 @@ export default function QuizPlayScreen() {
         recommendedTopicId,
     ]);
 
-    // Otomatik gecis yok: sonraki soruya kullanici tiklayarak geciyor.
+    const closeFlow = () => router.push('/(tabs)/sources');
 
     if (isLoading) {
         return (
-            <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>Soru Akisi</Text>
-                <View style={[styles.card, styles.stateCard]}>
+            <View style={[styles.screen, { paddingTop: insets.top + spacing.lg }]}>
+                <StatusBar style="dark" />
+                <View style={styles.stateWrap}>
                     <SkeletonCard height={96} />
-                    <Text style={styles.description}>Soru ortami hazirlaniyor...</Text>
+                    <Text style={styles.stateText}>Soru ortamı hazırlanıyor...</Text>
                 </View>
-            </ScrollView>
+            </View>
         );
     }
 
     if (error) {
         return (
-            <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>Soru Akisi</Text>
-                <View style={[styles.card, styles.errorCard]}>
-                    <Text style={styles.errorTitle}>Akis acilamadi</Text>
-                    <Text style={styles.error}>{error}</Text>
+            <View style={[styles.screen, { paddingTop: insets.top + spacing.lg }]}>
+                <StatusBar style="dark" />
+                <View style={styles.stateWrap}>
+                    <Text style={styles.errorTitle}>Akış açılamadı</Text>
+                    <Text style={styles.errorText}>{error}</Text>
                     <Link href="/(tabs)/sources" style={styles.stateLinkButton}>
-                        Test Seçimine Dön
+                        Kaynaklara Dön
                     </Link>
                 </View>
-            </ScrollView>
+            </View>
         );
     }
 
     return (
-        <ScrollView contentContainerStyle={styles.container} stickyHeaderIndices={[0]}>
-            <View style={styles.stickyHeader}>
+        <View style={styles.screen}>
+            <StatusBar style="dark" />
+
+            <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
                 <View style={styles.headerTopRow}>
-                    <View style={styles.headerTextBlock}>
-                        <Text style={styles.headerEyebrow}>
-                            SORU {currentQuestionNumber} / {sessionQuestionCount}
-                        </Text>
-                        {/* Konu adi zaten soru kartindaki rozette; burada kaynak. */}
-                        <Text style={styles.headerTitle} numberOfLines={1}>
-                            {source?.title ?? 'Kaynak'}
-                        </Text>
-                    </View>
+                    <Text style={styles.headerEyebrow} numberOfLines={1}>
+                        {activeTopicName.toLocaleUpperCase('tr-TR')}
+                    </Text>
 
-                    <View style={styles.headerActions}>
-                        {currentQuestion && !answerFeedback ? (
-                            <View style={styles.timerChip}>
-                                <Ionicons
-                                    name="time-outline"
-                                    size={13}
-                                    color={palette.textSecondary}
-                                />
-                                <Text style={styles.timerChipText}>
-                                    {formatElapsed(elapsedSeconds)}
-                                </Text>
-                            </View>
-                        ) : null}
-
-                        {/* Link asChild cocugun `style`ini undefined ile
-                            ezdigi icin router.push kullaniliyor. */}
-                        <Pressable
-                            onPress={() => router.push('/(tabs)/sources')}
-                            style={styles.closeButton}
-                            hitSlop={8}
-                        >
+                    {currentQuestion && !answerFeedback ? (
+                        <View style={styles.timerChip}>
                             <Ionicons
-                                name="close"
-                                size={17}
-                                color={palette.textSecondary}
+                                name="time-outline"
+                                size={12}
+                                color={palette.textMuted}
                             />
-                        </Pressable>
+                            <Text style={styles.timerChipText}>
+                                {formatElapsed(elapsedSeconds)}
+                            </Text>
+                        </View>
+                    ) : null}
+
+                    {/* Link asChild cocugun `style`ini undefined ile ezdigi icin
+                        router.push kullaniliyor. */}
+                    <Pressable onPress={closeFlow} style={styles.closeButton} hitSlop={8}>
+                        <Ionicons name="close" size={18} color={palette.textSecondary} />
+                    </Pressable>
+                </View>
+
+                <View style={styles.progressRow}>
+                    <View style={styles.progressTrack}>
+                        <View
+                            style={[styles.progressFill, { width: `${progressRatio * 100}%` }]}
+                        />
                     </View>
+                    <Text style={styles.progressLabel}>
+                        {currentQuestionNumber} / {sessionQuestionCount}
+                    </Text>
                 </View>
 
                 {/* Kaynaktaki sorular bitince AI uretimine geciliyor; yalnizca
                     o durumda rozet gosteriliyor. */}
                 {questionOrigin === 'ai' ? (
-                    <View style={styles.originRow}>
-                        <Text style={[styles.headerChip, styles.headerChipAi]}>
-                            AI üretti
-                        </Text>
+                    <View style={styles.aiBadge}>
+                        <Ionicons name="sparkles" size={10} color={palette.accent} />
+                        <Text style={styles.aiBadgeText}>AI üretti</Text>
                     </View>
                 ) : null}
             </View>
 
-            <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${progressRatio * 100}%` }]} />
-            </View>
+            <ScrollView
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+            >
+                {bootError ? <Text style={styles.errorText}>{bootError}</Text> : null}
 
-            {bootError ? <Text style={styles.error}>{bootError}</Text> : null}
+                {!currentQuestion && isGenerating ? (
+                    <View style={styles.stateWrap}>
+                        <SkeletonCard height={96} />
+                        <Text style={styles.stateText}>İlk soru hazırlanıyor...</Text>
+                    </View>
+                ) : null}
 
-            {!currentQuestion && isGenerating ? (
-                <View style={[styles.card, styles.stateCard]}>
-                    <SkeletonCard height={96} />
-                    <Text style={styles.description}>Ilk soru hazirlaniyor...</Text>
-                </View>
-            ) : null}
-
-            {!currentQuestion && !isGenerating ? (
-                <Pressable
-                    onPress={() => {
-                        hasBootstrappedRef.current = true;
-                        void bootstrapQuestion();
-                    }}
-                    style={styles.secondaryButton}
-                >
-                    <Text style={styles.secondaryButtonText}>Akisi Tekrar Baslat</Text>
-                </Pressable>
-            ) : null}
-
-            {currentQuestion ? (
-                <AnimatedCard
-                    style={styles.card}
-                    delayMs={40}
-                    resetKey={`${currentQuestion.soru}-${activeTopic?.id ?? 'unknown'}`}
-                >
-                    <QuestionCard
-                        question={currentQuestion}
-                        topicName={activeTopic?.name ?? activeTopicName}
-                        selectedOption={answerFeedback?.userChoice ?? null}
-                        correctOption={answerFeedback?.correctChoice ?? null}
-                        disabled={isSubmittingAnswer || Boolean(answerFeedback)}
-                        onSelectOption={(option) => {
-                            if (isSubmittingAnswer) {
-                                return;
-                            }
-                            setWrongAnswerExplanation(null);
-                            setAnsweredCount((previous) => previous + 1);
-                            const isCorrect =
-                                option.trim().charAt(0).toUpperCase() ===
-                                currentQuestion.dogruCevap.trim().charAt(0).toUpperCase();
-
-                            void submitAnswer(option)
-                                .then(() => {
-                                    if (isCorrect) {
-                                        setCorrectCount((previous) => previous + 1);
-                                    }
-                                })
-                                // Hata durumu useQuiz icinde zaten ekrana
-                                // yansiyor; burada yutulmasi yeterli.
-                                .catch(() => undefined);
+                {!currentQuestion && !isGenerating ? (
+                    <Pressable
+                        onPress={() => {
+                            hasBootstrappedRef.current = true;
+                            void bootstrapQuestion();
                         }}
-                    />
-                    {isSubmittingAnswer ? <ActivityIndicator size="small" color={palette.indigo600} /> : null}
-                </AnimatedCard>
-            ) : null}
+                        style={({ pressed }) => [
+                            styles.secondaryButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Text style={styles.secondaryButtonText}>Akışı Tekrar Başlat</Text>
+                    </Pressable>
+                ) : null}
 
-            {answerFeedback ? (
-                <AnimatedCard
-                    style={styles.solutionCard}
-                    delayMs={60}
-                    resetKey={`${answerFeedback.userChoice}-${answerFeedback.correctChoice}-${answerFeedback.isCorrect}`}
-                >
-                    <View style={styles.solutionHeader}>
-                        <View style={styles.solutionHeaderText}>
-                            <Text style={styles.solutionEyebrow}>ÇÖZÜM &amp; AÇIKLAMA</Text>
-                            <View style={styles.verdictRow}>
-                                <Ionicons
-                                    name={
-                                        answerFeedback.isCorrect
-                                            ? 'checkmark-circle'
-                                            : 'close-circle'
-                                    }
-                                    size={19}
-                                    color={
-                                        answerFeedback.isCorrect
-                                            ? palette.emerald500
-                                            : palette.error
-                                    }
-                                />
-                                <Text
-                                    style={[
-                                        styles.verdictText,
-                                        answerFeedback.isCorrect
-                                            ? styles.verdictTextCorrect
-                                            : styles.verdictTextWrong,
-                                    ]}
-                                >
-                                    {answerFeedback.isCorrect ? 'Doğru Cevap' : 'Yanlış Cevap'}
-                                </Text>
-                            </View>
+                {currentQuestion ? (
+                    <AnimatedCard
+                        delayMs={40}
+                        resetKey={`${currentQuestion.soru}-${activeTopic?.id ?? 'unknown'}`}
+                    >
+                        <QuestionCard
+                            question={currentQuestion}
+                            selectedOption={answerFeedback?.userChoice ?? null}
+                            correctOption={answerFeedback?.correctChoice ?? null}
+                            disabled={isSubmittingAnswer || Boolean(answerFeedback)}
+                            onSelectOption={(option) => {
+                                if (isSubmittingAnswer) {
+                                    return;
+                                }
+                                setWrongAnswerExplanation(null);
+                                setAnsweredCount((previous) => previous + 1);
+                                const isCorrect =
+                                    option.trim().charAt(0).toUpperCase() ===
+                                    currentQuestion.dogruCevap.trim().charAt(0).toUpperCase();
+
+                                void submitAnswer(option)
+                                    .then(() => {
+                                        if (isCorrect) {
+                                            setCorrectCount((previous) => previous + 1);
+                                        }
+                                    })
+                                    // Hata durumu useQuiz icinde zaten ekrana
+                                    // yansiyor; burada yutulmasi yeterli.
+                                    .catch(() => undefined);
+                            }}
+                        />
+                        {isSubmittingAnswer ? (
+                            <ActivityIndicator
+                                size="small"
+                                color={palette.accent}
+                                style={styles.inlineSpinner}
+                            />
+                        ) : null}
+                    </AnimatedCard>
+                ) : null}
+
+                {answerFeedback ? (
+                    <AnimatedCard
+                        style={styles.solutionCard}
+                        delayMs={60}
+                        resetKey={`${answerFeedback.userChoice}-${answerFeedback.correctChoice}-${answerFeedback.isCorrect}`}
+                    >
+                        <View style={styles.solutionHead}>
+                            <Ionicons name="sparkles" size={13} color={palette.accent} />
+                            <Text style={styles.solutionEyebrow}>AI ÇÖZÜM AÇIKLAMASI</Text>
                         </View>
+
+                        <Text style={styles.solutionBody}>{answerFeedback.explanation}</Text>
 
                         {!answerFeedback.isCorrect ? (
                             <Pressable
@@ -441,91 +423,54 @@ export default function QuizPlayScreen() {
                                 style={({ pressed }) => [
                                     styles.deepAnalysisButton,
                                     pressed ? styles.pressed : null,
-                                    isExplaining ? styles.buttonDisabled : null,
+                                    isExplaining ? styles.disabled : null,
                                 ]}
                             >
-                                <Ionicons
-                                    name="sparkles"
-                                    size={13}
-                                    color={palette.onDarkPrimary}
-                                />
-                                <Text style={styles.deepAnalysisButtonText}>
-                                    {isExplaining ? 'Analiz alınıyor...' : 'AI Derin Analiz İstedi'}
+                                <Ionicons name="sparkles" size={12} color={palette.accent} />
+                                <Text style={styles.deepAnalysisText}>
+                                    {isExplaining ? 'Analiz alınıyor...' : 'Derin analiz iste'}
                                 </Text>
                             </Pressable>
                         ) : null}
-                    </View>
 
-                    <View style={styles.answerSummary}>
-                        <View style={styles.answerSummaryRow}>
-                            <Text style={styles.answerSummaryLabel}>Senin cevabın</Text>
-                            <Text
-                                style={[
-                                    styles.answerSummaryValue,
-                                    answerFeedback.isCorrect
-                                        ? styles.answerSummaryValueCorrect
-                                        : styles.answerSummaryValueWrong,
-                                ]}
-                                numberOfLines={2}
-                            >
-                                {answerFeedback.userChoice}
-                            </Text>
-                        </View>
-                        <View style={styles.answerSummaryDivider} />
-                        <View style={styles.answerSummaryRow}>
-                            <Text style={styles.answerSummaryLabel}>Doğru cevap</Text>
-                            <Text
-                                style={[
-                                    styles.answerSummaryValue,
-                                    styles.answerSummaryValueCorrect,
-                                ]}
-                                numberOfLines={2}
-                            >
-                                {answerFeedback.correctChoice}
-                            </Text>
-                        </View>
-                    </View>
-
-                    <Text style={styles.solutionBody}>{answerFeedback.explanation}</Text>
-
-                    {!answerFeedback.isCorrect && (isExplaining || wrongAnswerExplanation) ? (
-                        <View style={styles.coachBox}>
-                            <View style={styles.coachHeaderRow}>
-                                <View style={styles.coachIcon}>
-                                    <Ionicons
-                                        name="sparkles"
-                                        size={13}
-                                        color={palette.onDarkPrimary}
-                                    />
-                                </View>
-                                <Text style={styles.coachTitle}>Gemini AI Koç Tespiti</Text>
-                            </View>
-
-                            {isExplaining && !wrongAnswerExplanation ? (
-                                <View style={styles.coachLoadingRow}>
-                                    <ActivityIndicator size="small" color={palette.indigo600} />
-                                    <Text style={styles.coachLoadingText}>
-                                        Koç bu soruyu inceliyor...
+                        {!answerFeedback.isCorrect && (isExplaining || wrongAnswerExplanation) ? (
+                            <View style={styles.coachBox}>
+                                {isExplaining && !wrongAnswerExplanation ? (
+                                    <View style={styles.coachLoadingRow}>
+                                        <ActivityIndicator
+                                            size="small"
+                                            color={palette.accent}
+                                        />
+                                        <Text style={styles.coachText}>
+                                            Koç bu soruyu inceliyor...
+                                        </Text>
+                                    </View>
+                                ) : (
+                                    <Text style={styles.coachText}>
+                                        {wrongAnswerExplanation}
                                     </Text>
-                                </View>
-                            ) : (
-                                <Text style={styles.coachText}>{wrongAnswerExplanation}</Text>
-                            )}
-                        </View>
-                    ) : null}
+                                )}
+                            </View>
+                        ) : null}
+                    </AnimatedCard>
+                ) : null}
 
-                    {isSessionFinished ? (
-                        <View style={styles.summaryBox}>
-                            <Text style={styles.summaryTitle}>Test tamamlandı</Text>
-                            <Text style={styles.summaryText}>
-                                {sessionQuestionCount} sorudan {correctCount} doğru
-                            </Text>
-                        </View>
-                    ) : null}
+                {isSessionFinished ? (
+                    <View style={styles.summaryBox}>
+                        <Text style={styles.summaryTitle}>Test tamamlandı</Text>
+                        <Text style={styles.summaryText}>
+                            {sessionQuestionCount} sorudan {correctCount} doğru
+                        </Text>
+                    </View>
+                ) : null}
+            </ScrollView>
 
+            {/* Tasarimda birincil aksiyon ekranin altina sabit. */}
+            {answerFeedback ? (
+                <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
                     {isSessionFinished ? (
                         <Pressable
-                            onPress={() => router.push('/(tabs)/sources')}
+                            onPress={closeFlow}
                             style={({ pressed }) => [
                                 styles.primaryButton,
                                 pressed ? styles.pressed : null,
@@ -542,11 +487,14 @@ export default function QuizPlayScreen() {
                             style={({ pressed }) => [
                                 styles.primaryButton,
                                 pressed ? styles.pressed : null,
-                                isGenerating ? styles.buttonDisabled : null,
+                                isGenerating ? styles.disabled : null,
                             ]}
                         >
                             {isGenerating ? (
-                                <ActivityIndicator size="small" color={palette.onDarkPrimary} />
+                                <ActivityIndicator
+                                    size="small"
+                                    color={palette.onDarkPrimary}
+                                />
                             ) : (
                                 <>
                                     <Text style={styles.primaryButtonText}>Sonraki Soru</Text>
@@ -559,375 +507,243 @@ export default function QuizPlayScreen() {
                             )}
                         </Pressable>
                     )}
-                </AnimatedCard>
+                </View>
             ) : null}
-        </ScrollView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        padding: spacing.lg,
-        gap: 12,
-        backgroundColor: palette.cardBg,
+    screen: {
+        flex: 1,
+        backgroundColor: palette.pageBg,
     },
-    title: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: palette.textPrimary,
-    },
-    stickyHeader: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.lg,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 4,
-        backgroundColor: palette.cardBg,
+    header: {
+        paddingHorizontal: spacing.lg,
+        paddingBottom: spacing.md,
+        gap: spacing.sm,
+        backgroundColor: palette.pageBg,
     },
     headerTopRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
         gap: spacing.sm,
-    },
-    headerTextBlock: {
-        flex: 1,
     },
     headerEyebrow: {
-        fontSize: 11,
-        fontWeight: '800',
-        letterSpacing: 0.8,
-        color: palette.textMuted,
-    },
-    headerTitle: {
-        fontSize: 15,
-        fontWeight: '800',
-        color: palette.textPrimary,
-        marginTop: 2,
-    },
-    closeButton: {
-        width: 30,
-        height: 30,
-        borderRadius: radius.sm,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: palette.pageBg,
-    },
-    closeButtonText: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: palette.textSecondary,
-    },
-    headerChipRow: {
-        marginTop: 4,
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    headerChip: {
-        borderRadius: 9999,
-        borderWidth: 1,
-        fontSize: 11,
-        fontWeight: '700',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        overflow: 'hidden',
-    },
-    headerChipBank: {
-        borderColor: palette.indigo500,
-        backgroundColor: palette.indigoSurface,
-        color: palette.indigo600,
-    },
-    headerChipAi: {
-        borderColor: palette.amber500,
-        backgroundColor: palette.amberSurface,
-        color: palette.amber600,
-    },
-    card: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.md,
-        padding: spacing.md,
-        gap: 10,
-        backgroundColor: palette.cardBg,
-    },
-    sectionTitle: {
-        ...uiType.heading,
-        color: palette.textPrimary,
-    },
-    pressed: {
-        opacity: 0.85,
-    },
-    headerActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
+        flex: 1,
+        ...uiType.statLabel,
+        color: palette.accent,
     },
     timerChip: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-        paddingVertical: 5,
-        paddingHorizontal: 9,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
         borderRadius: radius.pill,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        backgroundColor: palette.pageBg,
+        backgroundColor: palette.subtleBg,
     },
     timerChipText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '700',
-        color: palette.textSecondary,
+        color: palette.textMuted,
     },
-    originRow: {
+    closeButton: {
+        width: 30,
+        height: 30,
+        borderRadius: radius.pill,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: palette.subtleBg,
+    },
+    progressRow: {
         flexDirection: 'row',
-        marginTop: 8,
+        alignItems: 'center',
+        gap: spacing.sm,
     },
     progressTrack: {
+        flex: 1,
         height: 6,
         borderRadius: radius.pill,
-        backgroundColor: palette.cardBorder,
+        backgroundColor: palette.teal50,
         overflow: 'hidden',
     },
     progressFill: {
         height: '100%',
         borderRadius: radius.pill,
-        backgroundColor: palette.indigo600,
+        backgroundColor: palette.accent,
     },
-    primaryButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: spacing.sm,
-        marginTop: spacing.sm,
-        paddingVertical: 13,
-        borderRadius: radius.pill,
-        backgroundColor: palette.indigo600,
-    },
-    primaryButtonText: {
-        color: palette.onDarkPrimary,
-        fontSize: 15,
-        fontWeight: '700',
-    },
-    summaryBox: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.emerald500,
-        backgroundColor: palette.emeraldSurface,
-        padding: spacing.md,
-        gap: 4,
-    },
-    summaryTitle: {
-        fontSize: 15,
-        fontWeight: '800',
-        color: '#065f46',
-    },
-    summaryText: {
-        fontSize: 14,
-        color: palette.textSecondary,
-    },
-
-    // --- Cozum & aciklama karti ---
-    solutionCard: {
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        borderRadius: radius.lg,
-        padding: spacing.lg,
-        gap: spacing.md,
-        backgroundColor: palette.cardBg,
-    },
-    solutionHeader: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        justifyContent: 'space-between',
-        gap: spacing.sm,
-    },
-    solutionHeaderText: {
-        flex: 1,
-        gap: 4,
-    },
-    solutionEyebrow: {
-        fontSize: 11,
-        fontWeight: '800',
-        letterSpacing: 0.9,
-        color: palette.indigo600,
-    },
-    verdictRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    verdictText: {
-        fontSize: 18,
-        fontWeight: '800',
-    },
-    verdictTextCorrect: {
-        color: '#065f46',
-    },
-    verdictTextWrong: {
-        color: palette.error,
-    },
-    deepAnalysisButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        borderRadius: radius.pill,
-        backgroundColor: palette.indigo600,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        maxWidth: 180,
-    },
-    deepAnalysisButtonText: {
-        color: palette.onDarkPrimary,
-        fontSize: 12,
-        fontWeight: '700',
-        flexShrink: 1,
-    },
-    answerSummary: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        backgroundColor: palette.pageBg,
-        paddingVertical: 4,
-        paddingHorizontal: spacing.md,
-    },
-    answerSummaryRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: spacing.md,
-        paddingVertical: 10,
-    },
-    answerSummaryDivider: {
-        height: 1,
-        backgroundColor: palette.cardBorder,
-    },
-    answerSummaryLabel: {
-        fontSize: 12,
+    progressLabel: {
+        ...uiType.small,
         fontWeight: '700',
         color: palette.textMuted,
     },
-    answerSummaryValue: {
-        flex: 1,
-        textAlign: 'right',
-        fontSize: 14,
-        fontWeight: '700',
-    },
-    answerSummaryValueCorrect: {
-        color: '#065f46',
-    },
-    answerSummaryValueWrong: {
-        color: palette.error,
-    },
-    solutionBody: {
-        fontSize: 15,
-        lineHeight: 23,
-        color: palette.textSecondary,
-    },
-
-    // --- Gemini AI Koc Tespiti kutusu ---
-    coachBox: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.indigoBorder,
-        backgroundColor: palette.indigoSurface,
-        padding: spacing.md,
-        gap: spacing.sm,
-    },
-    coachHeaderRow: {
+    aiBadge: {
+        alignSelf: 'flex-start',
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: radius.pill,
+        backgroundColor: palette.primarySurface,
+    },
+    aiBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: palette.accent,
+    },
+    container: {
+        paddingHorizontal: spacing.lg,
+        paddingBottom: spacing.xl,
+        gap: spacing.md,
+    },
+    inlineSpinner: {
+        marginTop: spacing.sm,
+    },
+    solutionCard: {
         gap: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.lg,
+        backgroundColor: palette.primarySurface,
     },
-    coachIcon: {
-        width: 22,
-        height: 22,
-        borderRadius: radius.sm,
+    solutionHead: {
+        flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: palette.indigo600,
+        gap: 6,
     },
-    coachTitle: {
-        fontSize: 13,
-        fontWeight: '800',
-        color: palette.indigo600,
-        letterSpacing: 0.2,
+    solutionEyebrow: {
+        ...uiType.statLabel,
+        color: palette.accent,
     },
-    coachText: {
-        fontSize: 14,
-        lineHeight: 22,
-        color: palette.textPrimary,
+    solutionBody: {
+        ...uiType.small,
+        lineHeight: 19,
+        color: palette.textSecondary,
+    },
+    deepAnalysisButton: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        marginTop: spacing.xs,
+        paddingVertical: 7,
+        paddingHorizontal: 11,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.cardBg,
+    },
+    deepAnalysisText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: palette.accent,
+    },
+    coachBox: {
+        marginTop: spacing.xs,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        backgroundColor: palette.cardBg,
     },
     coachLoadingRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: spacing.sm,
     },
-    coachLoadingText: {
-        fontSize: 13,
-        color: palette.indigo600,
-        fontWeight: '600',
-    },
-    description: {
-        fontSize: 16,
+    coachText: {
+        flex: 1,
+        ...uiType.small,
+        lineHeight: 19,
         color: palette.textSecondary,
-        lineHeight: 24,
     },
-    buttonDisabled: {
-        opacity: 0.7,
-    },
-    secondaryButton: {
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.indigo600,
-        paddingVertical: 10,
+    summaryBox: {
         alignItems: 'center',
-        marginTop: 4,
+        gap: spacing.xs,
+        padding: spacing.md,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.successBorder,
+        backgroundColor: palette.successSurface,
     },
-    secondaryButtonText: {
-        color: palette.indigo600,
-        fontSize: 14,
-        fontWeight: '700',
+    summaryTitle: {
+        fontSize: 15,
+        fontWeight: '800',
+        color: palette.teal900,
     },
-    explanationTitle: {
-        marginTop: 2,
-        fontSize: 14,
-        color: palette.textPrimary,
-        fontWeight: '700',
+    summaryText: {
+        ...uiType.small,
+        color: palette.textSecondary,
     },
-    error: {
-        color: palette.error,
-        fontSize: 14,
+    footer: {
+        paddingHorizontal: spacing.lg,
+        paddingTop: spacing.sm,
+        backgroundColor: palette.pageBg,
+        borderTopWidth: 1,
+        borderTopColor: palette.cardBorder,
     },
-    errorTitle: {
-        color: palette.error,
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    errorCard: {
-        borderColor: palette.error,
-        backgroundColor: '#fef2f2',
-    },
-    stateCard: {
+    primaryButton: {
+        flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: 120,
-    },
-    stateLinkButton: {
-        marginTop: 4,
-        alignSelf: 'flex-start',
-        backgroundColor: palette.indigo600,
-        color: palette.cardBg,
+        gap: spacing.sm,
+        paddingVertical: 15,
         borderRadius: radius.md,
-        overflow: 'hidden',
-        paddingVertical: 10,
-        paddingHorizontal: 14,
+        backgroundColor: palette.primary,
+    },
+    primaryButtonText: {
+        color: palette.onDarkPrimary,
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    secondaryButton: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 13,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.cardBg,
+    },
+    secondaryButtonText: {
+        color: palette.accent,
         fontSize: 14,
         fontWeight: '700',
     },
-    generationInfo: {
+    stateWrap: {
+        gap: spacing.sm,
+        paddingHorizontal: spacing.lg,
+    },
+    stateText: {
+        ...uiType.body,
+        color: palette.textMuted,
+        textAlign: 'center',
+    },
+    stateLinkButton: {
+        alignSelf: 'flex-start',
+        marginTop: spacing.sm,
+        backgroundColor: palette.primary,
+        color: palette.onDarkPrimary,
+        borderRadius: radius.md,
+        overflow: 'hidden',
+        paddingVertical: 11,
+        paddingHorizontal: 16,
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    errorTitle: {
+        color: palette.danger,
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    errorText: {
+        color: palette.danger,
         fontSize: 13,
-        color: palette.indigo600,
+        lineHeight: 19,
+    },
+    pressed: {
+        opacity: 0.75,
+    },
+    disabled: {
+        opacity: 0.55,
     },
 });

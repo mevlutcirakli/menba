@@ -246,7 +246,7 @@ export function useQuiz(sourceId?: string) {
         // hala cozulmemis sorusu olanlar arasindan secmek icin.
         const { data: bankRows } = await supabase
             .from('questions')
-            .select('topic_id')
+            .select('id, topic_id')
             .in(
                 'topic_id',
                 safeTopics.map((topic) => topic.id)
@@ -268,6 +268,38 @@ export function useQuiz(sourceId?: string) {
             setIsLoading(false);
             return;
         }
+
+        // Daha once cevaplanmis sorular "gorulmus" sayiliyor. Bu kume onceden
+        // yalnizca bellekte (bu mount suresince) tutuluyordu; ekrandan cikip
+        // teste yeniden baslayinca sifirlaniyor ve ayni sorular tekrar
+        // servis ediliyordu. Gecmis question_logs'ta duruyor, oradan
+        // tohumlaniyor ki banka gercekten tukensin.
+        const bankQuestionIds = new Set((bankRows ?? []).map((row) => row.id));
+        if (bankQuestionIds.size > 0) {
+            // Loglar kullanici bazinda cekilip istemcide kesistiriliyor:
+            // .in(...) ile binlerce soru kimligi gondermek URL sinirina
+            // takilabiliyor.
+            const { data: answeredRows } = await supabase
+                .from('question_logs')
+                .select('question_id')
+                .eq('user_id', user.id);
+
+            for (const row of answeredRows ?? []) {
+                if (bankQuestionIds.has(row.question_id)) {
+                    askedQuestionIdsRef.current.add(row.question_id);
+                }
+            }
+        }
+
+        // Konu basina "gorulmus" sayisi sifirdan hesaplaniyor; refresh birden
+        // fazla kez kosarsa sayac sismesin.
+        const askedCounts = new Map<string, number>();
+        for (const row of bankRows ?? []) {
+            if (askedQuestionIdsRef.current.has(row.id)) {
+                askedCounts.set(row.topic_id, (askedCounts.get(row.topic_id) ?? 0) + 1);
+            }
+        }
+        askedBankCountByTopicRef.current = askedCounts;
 
         const topicIds = safeTopics.map((topic) => topic.id);
         const { data: progressRows, error: progressError } = await supabase
@@ -340,10 +372,10 @@ export function useQuiz(sourceId?: string) {
                 return null;
             }
 
-            // Gorulmemis soru kalmadiysa null donuyoruz; cagiran taraf boylece
-            // AI uretimine geciyor. Onceden burada gorulmus sorular yeniden
-            // havuza aliniyordu, bu yuzden konu bitmis olsa bile uretim asamasi
-            // hic baslamiyor, ayni sorular donup duruyordu.
+            // "Gorulmus" = bu oturumda sorulmus VEYA gecmiste cevaplanmis
+            // (bkz. refresh: askedQuestionIdsRef question_logs'tan
+            // tohumlaniyor). Gorulmemis soru kalmadiysa null donuyoruz;
+            // cagiran taraf boylece AI uretimine geciyor.
             const unseen = rows.filter((row) => !askedQuestionIdsRef.current.has(row.id));
             if (unseen.length === 0) {
                 return null;

@@ -7,8 +7,6 @@ import type { GeneratedQuestion } from '../types/quiz.types';
 interface QuestionCardProps {
     question: GeneratedQuestion;
     onSelectOption: (option: string) => void;
-    /** Ust kisimda gosterilen konu rozeti. */
-    topicName?: string | null;
     /** Cevaplandiktan sonra secili ve dogru siklari isaretlemek icin. */
     selectedOption?: string | null;
     correctOption?: string | null;
@@ -23,7 +21,7 @@ const OPTION_STAGGER_MS = 45;
 /**
  * Sikler Edge Function'dan "A) Metin" bicimiyle geliyor. Harfi ayirip ayri
  * kutuda gostermek icin basi ayikliyoruz; format farkli gelirse sirasindan
- * turetilen harfi kullanip metni oldugu gibi biraiyoruz.
+ * turetilen harfi kullanip metni oldugu gibi birakiyoruz.
  */
 function splitOption(option: string, index: number): { letter: string; text: string } {
     const match = option.match(/^\s*([A-Ea-e])\s*[).\-:]\s*(.+)$/);
@@ -93,7 +91,6 @@ function OptionRow({
 
     const isToned = state === 'correct' || state === 'wrong';
 
-    // Vurgulanan siklarda hafif bir "pop", solanlarda hafif kucultme.
     const revealScale = reveal.interpolate({
         inputRange: [0, 1],
         outputRange: [1, isToned ? 1.02 : 0.99],
@@ -112,8 +109,10 @@ function OptionRow({
     // Secilmeyen sikler cevaptan sonra solar.
     const mutedOpacity = reveal.interpolate({
         inputRange: [0, 1],
-        outputRange: [1, 0.4],
+        outputRange: [1, 0.55],
     });
+
+    const { letter, text } = splitOption(option, index);
 
     return (
         <Animated.View
@@ -151,17 +150,24 @@ function OptionRow({
                     state === 'wrong' ? styles.optionWrong : null,
                 ]}
             >
-                <View
-                    style={[
-                        styles.letterBox,
-                        state === 'correct' ? styles.letterBoxCorrect : null,
-                        state === 'wrong' ? styles.letterBoxWrong : null,
-                    ]}
-                >
-                    <Text style={[styles.letterText, isToned ? styles.letterTextOnTone : null]}>
-                        {splitOption(option, index).letter}
-                    </Text>
-                </View>
+                {/* Tasarimda harf yalnizca isaretlenmis siklarda dolu daire
+                    icinde; notr siklarda duz gri harf. */}
+                {isToned ? (
+                    <View
+                        style={[
+                            styles.letterBadge,
+                            state === 'correct'
+                                ? styles.letterBadgeCorrect
+                                : styles.letterBadgeWrong,
+                        ]}
+                    >
+                        <Text style={styles.letterBadgeText}>{letter}</Text>
+                    </View>
+                ) : (
+                    <View style={styles.letterSlot}>
+                        <Text style={styles.letterPlain}>{letter}</Text>
+                    </View>
+                )}
 
                 <Text
                     style={[
@@ -170,14 +176,14 @@ function OptionRow({
                         state === 'wrong' ? styles.optionTextWrong : null,
                     ]}
                 >
-                    {splitOption(option, index).text}
+                    {text}
                 </Text>
 
                 {state === 'correct' ? (
-                    <Ionicons name="checkmark-circle" size={22} color={palette.emerald500} />
+                    <Ionicons name="checkmark-circle" size={20} color={palette.success} />
                 ) : null}
                 {state === 'wrong' ? (
-                    <Ionicons name="close-circle" size={22} color={palette.error} />
+                    <Ionicons name="close-circle" size={20} color={palette.danger} />
                 ) : null}
             </Pressable>
         </Animated.View>
@@ -187,7 +193,6 @@ function OptionRow({
 export function QuestionCard({
     question,
     onSelectOption,
-    topicName,
     selectedOption,
     correctOption,
     disabled = false,
@@ -195,16 +200,10 @@ export function QuestionCard({
     const hasAnswered = Boolean(selectedOption);
 
     return (
-        <View style={styles.card}>
-            {topicName ? (
-                <View style={styles.topicPill}>
-                    <Text style={styles.topicPillText} numberOfLines={1}>
-                        {topicName}
-                    </Text>
-                </View>
-            ) : null}
-
-            <Text style={styles.question}>{question.soru}</Text>
+        <View style={styles.wrapper}>
+            <View style={styles.questionBox}>
+                <Text style={styles.question}>{question.soru}</Text>
+            </View>
 
             <View style={styles.optionList}>
                 {question.secenekler.map((option, index) => {
@@ -215,10 +214,10 @@ export function QuestionCard({
                     const state: OptionState = isCorrect
                         ? 'correct'
                         : isWrongPick
-                            ? 'wrong'
-                            : hasAnswered
-                                ? 'muted'
-                                : 'idle';
+                          ? 'wrong'
+                          : hasAnswered
+                            ? 'muted'
+                            : 'idle';
 
                     return (
                         <OptionRow
@@ -239,33 +238,18 @@ export function QuestionCard({
 }
 
 const styles = StyleSheet.create({
-    card: {
-        backgroundColor: palette.cardBg,
-        borderRadius: radius.lg,
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        padding: spacing.lg,
+    wrapper: {
         gap: spacing.md,
     },
-    topicPill: {
-        alignSelf: 'flex-start',
-        paddingHorizontal: 11,
-        paddingVertical: 5,
-        borderRadius: radius.pill,
-        backgroundColor: palette.indigoSurface,
-        borderWidth: 1,
-        borderColor: palette.indigoBorder,
-        maxWidth: '100%',
-    },
-    topicPillText: {
-        color: palette.indigo600,
-        fontSize: 12,
-        fontWeight: '700',
+    questionBox: {
+        backgroundColor: palette.subtleBg,
+        borderRadius: radius.lg,
+        padding: spacing.md,
     },
     question: {
-        fontSize: 18,
-        lineHeight: 26,
-        fontWeight: '800',
+        fontSize: 15,
+        lineHeight: 23,
+        fontWeight: '600',
         color: palette.textPrimary,
     },
     optionList: {
@@ -283,50 +267,53 @@ const styles = StyleSheet.create({
         backgroundColor: palette.cardBg,
     },
     optionCorrect: {
-        borderColor: palette.emerald500,
-        backgroundColor: palette.emeraldSurface,
+        borderColor: palette.success,
+        backgroundColor: palette.successSurface,
     },
     optionWrong: {
-        borderColor: palette.error,
-        backgroundColor: '#fef2f2',
+        borderColor: palette.danger,
+        backgroundColor: palette.dangerSurface,
     },
-    letterBox: {
-        width: 28,
-        height: 28,
-        borderRadius: radius.sm,
+    letterSlot: {
+        width: 24,
+        alignItems: 'center',
+    },
+    letterPlain: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: palette.textMuted,
+    },
+    letterBadge: {
+        width: 24,
+        height: 24,
+        borderRadius: radius.pill,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: palette.cardBorder,
-        backgroundColor: palette.pageBg,
     },
-    letterBoxCorrect: {
-        borderColor: palette.emerald500,
-        backgroundColor: palette.emerald500,
+    letterBadgeCorrect: {
+        backgroundColor: palette.success,
     },
-    letterBoxWrong: {
-        borderColor: palette.error,
-        backgroundColor: palette.error,
+    letterBadgeWrong: {
+        backgroundColor: palette.danger,
     },
-    letterText: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: palette.textSecondary,
-    },
-    letterTextOnTone: {
+    letterBadgeText: {
+        fontSize: 12,
+        fontWeight: '800',
         color: palette.onDarkPrimary,
     },
     optionText: {
         flex: 1,
         fontSize: 15,
         lineHeight: 21,
-        fontWeight: '600',
+        fontWeight: '500',
         color: palette.textPrimary,
     },
     optionTextCorrect: {
-        color: '#065f46',
+        color: palette.teal900,
+        fontWeight: '700',
     },
     optionTextWrong: {
-        color: palette.error,
+        color: palette.danger,
+        fontWeight: '700',
     },
 });
