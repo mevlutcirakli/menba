@@ -1,3 +1,8 @@
+import {
+    Manrope_700Bold,
+    Manrope_800ExtraBold,
+    useFonts,
+} from '@expo-google-fonts/manrope';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
@@ -6,8 +11,15 @@ import { palette } from '../src/theme/tokens';
 
 export default function RootLayout() {
     const { session, isLoading } = useAuth();
+    const [fontsLoaded] = useFonts({
+        Manrope_700Bold,
+        Manrope_800ExtraBold,
+    });
 
-    if (isLoading) {
+    // Fontlar hazir olmadan basliklari sistem fontuyla cizip sonra Manrope'a
+    // "atlatmamak" icin kisa bir yukleme ekrani bekletiliyor; bu zaten oturum
+    // kontrolu icin de gosterilen ekranin ayni.
+    if (isLoading || !fontsLoaded) {
         return (
             <View style={styles.loadingContainer}>
                 {/* Acilis ekrani acik zeminli; koyu ikon dogru secim. */}
@@ -30,6 +42,10 @@ export default function RootLayout() {
             <Stack>
                 <Stack.Protected guard={Boolean(session)}>
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                    <Stack.Screen
+                        name="add-source"
+                        options={{ title: 'Yeni Kaynak', presentation: 'modal' }}
+                    />
                     <Stack.Screen
                         name="quiz/[sourceId]"
                         options={{ title: 'Konu Yönetimi' }}

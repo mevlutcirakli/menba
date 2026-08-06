@@ -17,7 +17,7 @@ import { AnimatedCard } from '../../src/components/AnimatedCard';
 import { SkeletonCard } from '../../src/components/SkeletonCard';
 import { useQuiz } from '../../src/hooks/useQuiz';
 import { supabase } from '../../src/services/supabase';
-import { palette, radius, spacing, typography } from '../../src/theme/tokens';
+import { palette, radius, spacing, uiType } from '../../src/theme/tokens';
 
 interface QuizUiSessionState {
     selectedTopicId: string | null;
@@ -259,7 +259,7 @@ export default function QuizBySourceScreen() {
                 <Text style={styles.helperText}>
                     Yalnizca &quot;Yeni Konu&quot; akisindan elle ekledigin konular
                     silinebilir; kaynaktan cikarilanlar kaynagin kendisiyle birlikte
-                    silinir. Test baslatmak icin Test Coz sekmesini kullan.
+                    silinir. Test baslatmak icin asagidan bir konu sec.
                 </Text>
 
                 {topics.length === 0 ? (
@@ -362,7 +362,7 @@ export default function QuizBySourceScreen() {
                 {flowNotice ? <Text style={styles.flowNoticeText}>{flowNotice}</Text> : null}
             </AnimatedCard>
 
-            <Link href="/(tabs)/quiz" style={styles.stateLinkButton}>
+            <Link href="/(tabs)/sources" style={styles.stateLinkButton}>
                 Kaynak Listesine Don
             </Link>
         </ScrollView>
@@ -419,7 +419,7 @@ const styles = StyleSheet.create({
         backgroundColor: palette.cardBg,
     },
     sectionTitle: {
-        ...typography.heading,
+        ...uiType.heading,
         color: palette.textPrimary,
     },
     helperText: {

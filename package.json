@@ -14,8 +14,10 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "^2.2.0",
+    "@expo-google-fonts/manrope": "^0.4.1",
     "@supabase/supabase-js": "^2.111.0",
     "expo": "~54.0.35",
+    "expo-haptics": "~15.0.7",
     "expo-constants": "~18.0.13",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.23",

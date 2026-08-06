@@ -9,7 +9,7 @@ import {
     View,
 } from 'react-native';
 import { supabase } from '../src/services/supabase';
-import { palette, radius, spacing, typography } from '../src/theme/tokens';
+import { palette, radius, spacing, uiType } from '../src/theme/tokens';
 
 // Oturum acildiginda buradan cikisi _layout.tsx'teki Stack.Protected yapar;
 // bu ekranda ayrica Redirect kullanmak cift yonlendirmeye yol acar.
@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
         color: palette.textPrimary,
     },
     description: {
-        ...typography.body,
+        ...uiType.body,
         color: palette.textSecondary,
         marginBottom: 8,
     },

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { AnimatedCard } from '../../src/components/AnimatedCard';
 import { AppHeader } from '../../src/components/AppHeader';
+import * as Haptics from 'expo-haptics';
 import { SkeletonCard } from '../../src/components/SkeletonCard';
 import { useSources } from '../../src/hooks/useSources';
 import { supabase } from '../../src/services/supabase';
@@ -235,7 +236,12 @@ export default function SourcesListScreen() {
 
     return (
         <View style={styles.screen}>
-            <AppHeader />
+            <AppHeader
+                rightAction={{
+                    icon: 'add',
+                    onPress: () => router.push('/add-source'),
+                }}
+            />
 
             <ScrollView
                 contentContainerStyle={styles.container}
@@ -292,8 +298,21 @@ export default function SourcesListScreen() {
                         />
                         <Text style={styles.emptyText}>Henüz kaynak bulunmuyor</Text>
                         <Text style={styles.emptyHint}>
-                            &apos;Ekle&apos; sekmesinden ilk kaynağını yükleyerek başla.
+                            Bir dosya yükleyip ilk soru bankanı oluşturarak başla.
                         </Text>
+                        <Pressable
+                            onPress={() => {
+                                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                router.push('/add-source');
+                            }}
+                            style={({ pressed }) => [
+                                styles.emptyCta,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Ionicons name="add" size={16} color={palette.onDarkPrimary} />
+                            <Text style={styles.emptyCtaText}>Kaynak Ekle</Text>
+                        </Pressable>
                     </View>
                 ) : null}
 
@@ -692,6 +711,21 @@ const styles = StyleSheet.create({
         ...uiType.body,
         color: palette.textMuted,
         textAlign: 'center',
+    },
+    emptyCta: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+        marginTop: spacing.sm,
+        paddingVertical: 10,
+        paddingHorizontal: spacing.lg,
+        borderRadius: radius.pill,
+        backgroundColor: palette.indigo600,
+    },
+    emptyCtaText: {
+        color: palette.onDarkPrimary,
+        fontSize: 13,
+        fontWeight: '700',
     },
     footnote: {
         ...uiType.small,
