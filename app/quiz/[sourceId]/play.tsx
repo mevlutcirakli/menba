@@ -14,7 +14,7 @@ import { QuestionCard } from '../../../src/components/QuestionCard';
 import { SkeletonCard } from '../../../src/components/SkeletonCard';
 import { useQuiz } from '../../../src/hooks/useQuiz';
 import { explainWrongAnswer } from '../../../src/services/geminiService';
-import { palette, radius, spacing, typography } from '../../../src/theme/tokens';
+import { palette, radius, spacing, uiType } from '../../../src/theme/tokens';
 
 const DEFAULT_SESSION_QUESTION_COUNT = 5;
 
@@ -271,7 +271,7 @@ export default function QuizPlayScreen() {
                 <View style={[styles.card, styles.errorCard]}>
                     <Text style={styles.errorTitle}>Akis acilamadi</Text>
                     <Text style={styles.error}>{error}</Text>
-                    <Link href="/(tabs)/quiz" style={styles.stateLinkButton}>
+                    <Link href="/(tabs)/sources" style={styles.stateLinkButton}>
                         Test Seçimine Dön
                     </Link>
                 </View>
@@ -310,7 +310,7 @@ export default function QuizPlayScreen() {
                         {/* Link asChild cocugun `style`ini undefined ile
                             ezdigi icin router.push kullaniliyor. */}
                         <Pressable
-                            onPress={() => router.push('/(tabs)/quiz')}
+                            onPress={() => router.push('/(tabs)/sources')}
                             style={styles.closeButton}
                             hitSlop={8}
                         >
@@ -525,7 +525,7 @@ export default function QuizPlayScreen() {
 
                     {isSessionFinished ? (
                         <Pressable
-                            onPress={() => router.push('/(tabs)/quiz')}
+                            onPress={() => router.push('/(tabs)/sources')}
                             style={({ pressed }) => [
                                 styles.primaryButton,
                                 pressed ? styles.pressed : null,
@@ -653,7 +653,7 @@ const styles = StyleSheet.create({
         backgroundColor: palette.cardBg,
     },
     sectionTitle: {
-        ...typography.heading,
+        ...uiType.heading,
         color: palette.textPrimary,
     },
     pressed: {

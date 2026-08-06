@@ -1,5 +1,5 @@
-// AI Studio web surumunun tasarim dili. Ekranlar sirayla buna tasiniyor;
-// tasima bitince asagidaki eski `colors` objesi silinecek.
+// AI Studio web surumunun tasarim dili. Tum ekranlar bu tek sisteme tasindi;
+// eski `colors`/`typography` ikilisi kaldirildi (bkz. git tarihi).
 export const palette = {
     // Koyu marka yuzeyleri (ust bar, hero kartlar)
     navy900: '#0f172a',
@@ -40,33 +40,30 @@ export const gradients = {
     hero: ['#1e1b4b', '#0f172a'] as const,
 };
 
+// Baslik/font ailesi: Manrope yuklendiginde bu isimler kullanilabilir hale
+// gelir (bkz. app/_layout.tsx useFonts). Yuklenene kadar undefined donup
+// sistem fontuna duser, boylece font hazir olmadan render blocklanmaz.
+export const fontFamily = {
+    heading: 'Manrope_800ExtraBold',
+    headingSemibold: 'Manrope_700Bold',
+    body: undefined as string | undefined,
+};
+
 export const uiType = {
-    pageTitle: { fontSize: 26, fontWeight: '800' as const },
-    cardTitle: { fontSize: 17, fontWeight: '700' as const },
+    pageTitle: { fontSize: 26, fontWeight: '800' as const, fontFamily: fontFamily.heading },
+    cardTitle: { fontSize: 17, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
     statLabel: {
         fontSize: 11,
         fontWeight: '700' as const,
         letterSpacing: 0.8,
     },
-    statValue: { fontSize: 28, fontWeight: '800' as const },
+    statValue: { fontSize: 28, fontWeight: '800' as const, fontFamily: fontFamily.heading },
     body: { fontSize: 14, lineHeight: 20 },
     small: { fontSize: 12 },
-};
-
-export const colors = {
-    primary: '#0f766e',
-    primaryLight: '#0ea5a5',
-    primarySurface: '#ecfeff',
-    background: '#f4f7fb',
-    surface: '#ffffff',
-    border: '#dbe4f0',
-    textPrimary: '#0f172a',
-    textSecondary: '#475569',
-    textMuted: '#64748b',
-    success: '#16a34a',
-    successSurface: '#f0fdf4',
-    error: '#b91c1c',
-    errorSurface: '#fef2f2',
+    // Eski `typography` setinden tasindi (bkz. quiz akisi ekranlari).
+    title: { fontSize: 26, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
+    heading: { fontSize: 16, fontWeight: '700' as const, fontFamily: fontFamily.headingSemibold },
+    caption: { fontSize: 12, fontWeight: '700' as const },
 };
 
 export const radius = {
@@ -85,9 +82,21 @@ export const spacing = {
     xl: 28,
 };
 
-export const typography = {
-    title: { fontSize: 26, fontWeight: '700' as const },
-    heading: { fontSize: 16, fontWeight: '700' as const },
-    body: { fontSize: 15, lineHeight: 22 },
-    caption: { fontSize: 12, fontWeight: '700' as const },
+// Duz kenarlikli kartlara derinlik katmak icin. iOS golge + Android
+// elevation ayni obje icinde; kart stiline ...shadow.card seklinde acilir.
+export const shadow = {
+    card: {
+        shadowColor: '#0f172a',
+        shadowOpacity: 0.06,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 2,
+    },
+    raised: {
+        shadowColor: '#0f172a',
+        shadowOpacity: 0.1,
+        shadowRadius: 20,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 6,
+    },
 };

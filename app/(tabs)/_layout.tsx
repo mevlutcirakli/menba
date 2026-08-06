@@ -43,15 +43,20 @@ export default function TabsLayout() {
                 },
             }}
         >
+            {/* Ana sayfa artik panel/istatistikler: kullanici uygulamayi
+                actiginda bos bir form yerine "durumun bu" gorsun diye eski
+                dashboard.tsx buraya tasindi. Kaynak ekleme akisi artik tab
+                degil, sources ekranindaki "+" ile acilan bir modal
+                (/add-source). */}
             <Tabs.Screen
                 name="index"
                 options={{
-                    title: 'Ekle',
+                    title: 'Ana Sayfa',
                     tabBarIcon: ({ color, size, focused }) => (
                         <View style={[styles.iconWrap, focused ? styles.iconWrapFocused : null]}>
                             <FontAwesome
-                                name="plus-circle"
-                                size={focused ? size + 1 : size}
+                                name={focused ? 'home' : 'home'}
+                                size={focused ? size + 2 : size + 1}
                                 color={color}
                             />
                         </View>
@@ -61,41 +66,11 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="sources"
                 options={{
-                    title: 'Kaynaklar',
+                    title: 'Kaynaklarım',
                     tabBarIcon: ({ color, size, focused }) => (
                         <View style={[styles.iconWrap, focused ? styles.iconWrapFocused : null]}>
                             <FontAwesome
                                 name={focused ? 'book' : 'book'}
-                                size={focused ? size + 1 : size}
-                                color={color}
-                            />
-                        </View>
-                    ),
-                }}
-            />
-            <Tabs.Screen
-                name="quiz"
-                options={{
-                    title: 'Test Çöz',
-                    tabBarIcon: ({ color, size, focused }) => (
-                        <View style={[styles.iconWrap, focused ? styles.iconWrapFocused : null]}>
-                            <FontAwesome
-                                name={focused ? 'check-square' : 'check-square-o'}
-                                size={focused ? size + 1 : size}
-                                color={color}
-                            />
-                        </View>
-                    ),
-                }}
-            />
-            <Tabs.Screen
-                name="dashboard"
-                options={{
-                    title: 'Panel',
-                    tabBarIcon: ({ color, size, focused }) => (
-                        <View style={[styles.iconWrap, focused ? styles.iconWrapFocused : null]}>
-                            <FontAwesome
-                                name={focused ? 'line-chart' : 'bar-chart'}
                                 size={focused ? size + 1 : size}
                                 color={color}
                             />
