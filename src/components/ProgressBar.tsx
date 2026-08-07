@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
+import { palette, radius, spacing, uiType } from '../theme/tokens';
 
 interface ProgressBarProps {
     value: number;
@@ -20,21 +21,21 @@ export function ProgressBar({ value, max = 100 }: ProgressBarProps) {
 
 const styles = StyleSheet.create({
     wrapper: {
-        gap: 8,
+        gap: spacing.sm,
     },
     track: {
         height: 10,
-        borderRadius: 999,
-        backgroundColor: '#e5e7eb',
+        borderRadius: radius.pill,
+        backgroundColor: palette.subtleBg,
         overflow: 'hidden',
     },
     fill: {
         height: '100%',
-        backgroundColor: '#0f766e',
+        backgroundColor: palette.accent,
     },
     label: {
-        fontSize: 12,
-        color: '#475569',
+        ...uiType.small,
+        color: palette.textSecondary,
         fontWeight: '600',
     },
 });
