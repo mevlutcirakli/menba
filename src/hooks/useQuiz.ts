@@ -45,16 +45,25 @@ function getQueueKey(topicId: string, difficulty: number): string {
     return `${topicId}:${difficulty}`;
 }
 
+/**
+ * extract-questions, aciklama uretemedigi sorulara bu yer tutucuyu yaziyor.
+ * Ekranda ham haliyle gostermek yerine bos kabul edip UI'in kendi Turkce
+ * mesajini basmasina birakiyoruz.
+ */
+const EXPLANATION_PLACEHOLDER = 'Aciklama bulunmuyor.';
+
 function mapQuestionRowToGeneratedQuestion(row: QuestionRow): GeneratedQuestion {
     const options = Array.isArray(row.options)
         ? row.options.filter((item): item is string => typeof item === 'string')
         : [];
 
+    const explanation = row.explanation?.trim() ?? '';
+
     return {
         soru: row.question_text,
         secenekler: options,
         dogruCevap: row.correct_answer,
-        aciklama: row.explanation ?? 'Aciklama bulunmuyor.',
+        aciklama: explanation === EXPLANATION_PLACEHOLDER ? '' : explanation,
     };
 }
 

@@ -403,16 +403,57 @@ export default function QuizPlayScreen() {
 
                 {answerFeedback ? (
                     <AnimatedCard
-                        style={styles.solutionCard}
+                        style={[
+                            styles.solutionCard,
+                            answerFeedback.isCorrect
+                                ? styles.solutionCardCorrect
+                                : styles.solutionCardWrong,
+                        ]}
                         delayMs={60}
                         resetKey={`${answerFeedback.userChoice}-${answerFeedback.correctChoice}-${answerFeedback.isCorrect}`}
                     >
-                        <View style={styles.solutionHead}>
-                            <Ionicons name="sparkles" size={13} color={palette.accent} />
-                            <Text style={styles.solutionEyebrow}>AI ÇÖZÜM AÇIKLAMASI</Text>
+                        {/* Hukum: dogru mu yanlis mi, yanlissa hangi sikki
+                            isaretledi ve dogrusu neydi. */}
+                        <View style={styles.verdictRow}>
+                            <Ionicons
+                                name={
+                                    answerFeedback.isCorrect
+                                        ? 'checkmark-circle'
+                                        : 'close-circle'
+                                }
+                                size={18}
+                                color={
+                                    answerFeedback.isCorrect
+                                        ? palette.success
+                                        : palette.danger
+                                }
+                            />
+                            <Text
+                                style={[
+                                    styles.verdictText,
+                                    answerFeedback.isCorrect
+                                        ? styles.verdictTextCorrect
+                                        : styles.verdictTextWrong,
+                                ]}
+                            >
+                                {answerFeedback.isCorrect
+                                    ? 'Doğru cevap!'
+                                    : `Yanlış cevap — ${answerFeedback.userChoice} şıkkını işaretledin, doğrusu ${answerFeedback.correctChoice}.`}
+                            </Text>
                         </View>
 
-                        <Text style={styles.solutionBody}>{answerFeedback.explanation}</Text>
+                        <View style={styles.solutionHead}>
+                            <Ionicons name="sparkles" size={13} color={palette.accent} />
+                            <Text style={styles.solutionEyebrow}>ÇÖZÜM AÇIKLAMASI</Text>
+                        </View>
+
+                        <Text style={styles.solutionBody}>
+                            {/* AI yolunda Edge Function aciklamasiz da
+                                donebiliyor; optional chain kasitli. */}
+                            {answerFeedback.explanation?.trim()
+                                ? answerFeedback.explanation
+                                : 'Bu soru için kayıtlı bir açıklama yok.'}
+                        </Text>
 
                         {!answerFeedback.isCorrect ? (
                             <Pressable
@@ -605,7 +646,33 @@ const styles = StyleSheet.create({
         gap: spacing.sm,
         padding: spacing.md,
         borderRadius: radius.lg,
+        borderWidth: 1,
         backgroundColor: palette.primarySurface,
+    },
+    solutionCardCorrect: {
+        borderColor: palette.successBorder,
+        backgroundColor: palette.successSurface,
+    },
+    solutionCardWrong: {
+        borderColor: palette.dangerBorder,
+        backgroundColor: palette.dangerSurface,
+    },
+    verdictRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    verdictText: {
+        flex: 1,
+        fontSize: 14,
+        lineHeight: 20,
+        fontWeight: '700',
+    },
+    verdictTextCorrect: {
+        color: palette.success,
+    },
+    verdictTextWrong: {
+        color: palette.danger,
     },
     solutionHead: {
         flexDirection: 'row',

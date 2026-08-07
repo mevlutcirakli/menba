@@ -36,10 +36,40 @@ function splitOption(option: string, index: number): { letter: string; text: str
     };
 }
 
+/**
+ * Secili/dogru sik bilgisi useQuiz'den tek harf olarak geliyor ("C"), sikler
+ * ise tam metin ("C) Ankara"). Eslesme bu yuzden her zaman HARF uzerinden
+ * yapilmali; iki string'i dogrudan karsilastirmak hicbir zaman tutmaz.
+ * Fonksiyon "C", "C)", "C) Ankara" ve tam sik metninin kendisini kabul eder.
+ */
+function resolveLetter(value: string | null | undefined, options: string[]): string | null {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    // Tam sik metni geldiyse sirasindan harfi turet.
+    const exactIndex = options.findIndex((option) => option.trim() === trimmed);
+    if (exactIndex >= 0) {
+        return splitOption(options[exactIndex], exactIndex).letter;
+    }
+
+    // Yalnizca harf ("C") ya da harf + ayrac ("C)", "C) Ankara").
+    const match =
+        trimmed.match(/^([A-Ea-e])\s*[).\-:]?\s*$/) ?? trimmed.match(/^([A-Ea-e])\s*[).\-:]/);
+
+    return match ? match[1].toLocaleUpperCase('tr-TR') : null;
+}
+
 type OptionState = 'idle' | 'correct' | 'wrong' | 'muted';
 
 interface OptionRowProps {
+    /** onSelect'e geri verilecek ham deger. */
     option: string;
+    /** Rozette gosterilen harf; eslesme de bunun uzerinden yapiliyor. */
+    letter: string;
+    /** Harf ayiklandiktan sonra kalan sik metni. */
+    text: string;
     index: number;
     state: OptionState;
     hasAnswered: boolean;
@@ -55,6 +85,8 @@ interface OptionRowProps {
  */
 function OptionRow({
     option,
+    letter,
+    text,
     index,
     state,
     hasAnswered,
@@ -111,8 +143,6 @@ function OptionRow({
         inputRange: [0, 1],
         outputRange: [1, 0.55],
     });
-
-    const { letter, text } = splitOption(option, index);
 
     return (
         <Animated.View
@@ -197,7 +227,9 @@ export function QuestionCard({
     correctOption,
     disabled = false,
 }: QuestionCardProps) {
-    const hasAnswered = Boolean(selectedOption);
+    const selectedLetter = resolveLetter(selectedOption, question.secenekler);
+    const correctLetter = resolveLetter(correctOption, question.secenekler);
+    const hasAnswered = selectedLetter !== null;
 
     return (
         <View style={styles.wrapper}>
@@ -207,9 +239,11 @@ export function QuestionCard({
 
             <View style={styles.optionList}>
                 {question.secenekler.map((option, index) => {
-                    const isSelected = selectedOption === option;
-                    const isCorrect = hasAnswered && correctOption === option;
-                    const isWrongPick = hasAnswered && isSelected && !isCorrect;
+                    const { letter, text } = splitOption(option, index);
+
+                    const isCorrect = hasAnswered && correctLetter === letter;
+                    const isWrongPick =
+                        hasAnswered && selectedLetter === letter && !isCorrect;
 
                     const state: OptionState = isCorrect
                         ? 'correct'
@@ -223,6 +257,8 @@ export function QuestionCard({
                         <OptionRow
                             key={option}
                             option={option}
+                            letter={letter}
+                            text={text}
                             index={index}
                             state={state}
                             hasAnswered={hasAnswered}
