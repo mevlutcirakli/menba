@@ -7,11 +7,13 @@
         "development": {
             "developmentClient": true,
             "distribution": "internal",
-            "node": "22.19.0"
+            "node": "22.19.0",
+            "environment": "development"
         },
         "preview": {
             "distribution": "internal",
             "node": "22.19.0",
+            "environment": "preview",
             "android": {
                 "buildType": "apk"
             },
@@ -21,7 +23,8 @@
         },
         "production": {
             "autoIncrement": true,
-            "node": "22.19.0"
+            "node": "22.19.0",
+            "environment": "production"
         }
     },
     "submit": {

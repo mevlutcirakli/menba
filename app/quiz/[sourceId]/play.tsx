@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
     ActivityIndicator,
@@ -17,6 +17,7 @@ import { SkeletonCard } from '../../../src/components/SkeletonCard';
 import { useQuiz } from '../../../src/hooks/useQuiz';
 import { explainWrongAnswer } from '../../../src/services/geminiService';
 import { palette, radius, spacing, uiType } from '../../../src/theme/tokens';
+import { localizeError } from '../../../src/utils/errors';
 
 const DEFAULT_SESSION_QUESTION_COUNT = 5;
 
@@ -70,8 +71,18 @@ export default function QuizPlayScreen() {
     const [wrongAnswerExplanation, setWrongAnswerExplanation] = useState<string | null>(null);
     const [isExplaining, setIsExplaining] = useState(false);
     const [bootError, setBootError] = useState<string | null>(null);
+    const [answerError, setAnswerError] = useState<string | null>(null);
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
+    // Ilk soru denemesi tamamlanana kadar "Akisi Tekrar Baslat" butonu
+    // gosterilmez; aksi halde akis acilirken bir an hata kurtarma butonu
+    // goruntuleniyordu.
+    const [hasAttemptedBoot, setHasAttemptedBoot] = useState(false);
     const hasBootstrappedRef = useRef(false);
+    /**
+     * "Derin analiz" sonuclari soru metnine gore saklanir; ayni soru icin
+     * ikinci kez istenirse yeni bir AI cagrisi yapilmaz.
+     */
+    const explanationCacheRef = useRef<Map<string, string>>(new Map());
 
     const isSessionFinished = answeredCount >= sessionQuestionCount && Boolean(answerFeedback);
     const currentQuestionNumber = Math.min(
@@ -79,6 +90,8 @@ export default function QuizPlayScreen() {
         answerFeedback ? answeredCount : answeredCount + 1
     );
     const progressRatio = Math.min(1, currentQuestionNumber / sessionQuestionCount);
+    const sessionAccuracy =
+        answeredCount === 0 ? 0 : Math.round((correctCount / answeredCount) * 100);
 
     // Soru basina gecen sure; her yeni soruda sifirlanir.
     useEffect(() => {
@@ -142,13 +155,11 @@ export default function QuizPlayScreen() {
                 return;
             }
 
-            throw new Error('Akisi baslatmak icin uygun konu bulunamadi.');
+            throw new Error('Akışı başlatmak için uygun konu bulunamadı.');
         } catch (generationError) {
-            setBootError(
-                generationError instanceof Error
-                    ? generationError.message
-                    : 'Ilk soru acilirken bir hata olustu.'
-            );
+            setBootError(localizeError(generationError, 'İlk soru açılamadı.'));
+        } finally {
+            setHasAttemptedBoot(true);
         }
     }, [
         generateForTopic,
@@ -163,6 +174,8 @@ export default function QuizPlayScreen() {
     useEffect(() => {
         hasBootstrappedRef.current = false;
         setBootError(null);
+        setAnswerError(null);
+        setHasAttemptedBoot(false);
     }, [sourceId, initialTopicId, initialTopicName]);
 
     useEffect(() => {
@@ -171,6 +184,9 @@ export default function QuizPlayScreen() {
         }
 
         if (!initialTopicId && !initialTopicName && !recommendedTopicId) {
+            // Hicbir konu yok: beklenecek bir sey de yok, kullaniciya
+            // gercekten bir cikis yolu gosterilmeli.
+            setHasAttemptedBoot(true);
             return;
         }
 
@@ -191,6 +207,13 @@ export default function QuizPlayScreen() {
             return;
         }
 
+        // Ayni soru icin daha once analiz alindiysa tekrar AI cagrisi yapma.
+        const cached = explanationCacheRef.current.get(currentQuestion.soru);
+        if (cached) {
+            setWrongAnswerExplanation(cached);
+            return;
+        }
+
         setIsExplaining(true);
         setWrongAnswerExplanation(null);
 
@@ -201,12 +224,11 @@ export default function QuizPlayScreen() {
                 answerFeedback.correctChoice
             );
 
+            explanationCacheRef.current.set(currentQuestion.soru, explanation);
             setWrongAnswerExplanation(explanation);
         } catch (explainError) {
             setWrongAnswerExplanation(
-                explainError instanceof Error
-                    ? explainError.message
-                    : 'Aciklama alinirken hata olustu.'
+                localizeError(explainError, 'Açıklama alınamadı.')
             );
         } finally {
             setIsExplaining(false);
@@ -219,6 +241,7 @@ export default function QuizPlayScreen() {
         }
 
         setWrongAnswerExplanation(null);
+        setAnswerError(null);
 
         if (initialTopicName) {
             await generateForTopic({ topicName: initialTopicName });
@@ -241,7 +264,7 @@ export default function QuizPlayScreen() {
             return;
         }
 
-        setBootError('Sonraki soru icin uygun konu bulunamadi.');
+        setBootError('Sonraki soru için uygun konu bulunamadı.');
     }, [
         activeTopic?.id,
         generateForTopic,
@@ -252,7 +275,19 @@ export default function QuizPlayScreen() {
         recommendedTopicId,
     ]);
 
-    const closeFlow = () => router.push('/(tabs)/sources');
+    /**
+     * Akistan cikis. `push` yerine `back`: her cikista yeni bir ekran
+     * yiginin ustune eklendigi icin Android geri tusu eski, bayat quiz
+     * ekranlarini tek tek geri dolasiyordu.
+     */
+    const closeFlow = useCallback(() => {
+        if (router.canGoBack()) {
+            router.back();
+            return;
+        }
+
+        router.replace('/(tabs)/sources');
+    }, [router]);
 
     if (isLoading) {
         return (
@@ -266,16 +301,49 @@ export default function QuizPlayScreen() {
         );
     }
 
-    if (error) {
+    // Yalnizca soru gosterilemiyorken tam ekran hataya dusuyoruz. Onceden her
+    // `error` degeri bu dala giriyordu: tek bir cevap kaydedilemediginde
+    // ekrandaki soru ve ilerleme tamamen kayboluyordu.
+    if (error && !currentQuestion) {
         return (
             <View style={[styles.screen, { paddingTop: insets.top + spacing.lg }]}>
                 <StatusBar style="dark" />
                 <View style={styles.stateWrap}>
                     <Text style={styles.errorTitle}>Akış açılamadı</Text>
                     <Text style={styles.errorText}>{error}</Text>
-                    <Link href="/(tabs)/sources" style={styles.stateLinkButton}>
-                        Kaynaklara Dön
-                    </Link>
+
+                    <Pressable
+                        onPress={() => {
+                            hasBootstrappedRef.current = true;
+                            void bootstrapQuestion();
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Tekrar dene"
+                        style={({ pressed }) => [
+                            styles.primaryButton,
+                            styles.stateButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Ionicons
+                            name="refresh"
+                            size={16}
+                            color={palette.onDarkPrimary}
+                        />
+                        <Text style={styles.primaryButtonText}>Tekrar Dene</Text>
+                    </Pressable>
+
+                    <Pressable
+                        onPress={closeFlow}
+                        accessibilityRole="button"
+                        accessibilityLabel="Kaynaklara dön"
+                        style={({ pressed }) => [
+                            styles.secondaryButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Text style={styles.secondaryButtonText}>Kaynaklara Dön</Text>
+                    </Pressable>
                 </View>
             </View>
         );
@@ -305,8 +373,14 @@ export default function QuizPlayScreen() {
                     ) : null}
 
                     {/* Link asChild cocugun `style`ini undefined ile ezdigi icin
-                        router.push kullaniliyor. */}
-                    <Pressable onPress={closeFlow} style={styles.closeButton} hitSlop={8}>
+                        router.back kullaniliyor. */}
+                    <Pressable
+                        onPress={closeFlow}
+                        style={styles.closeButton}
+                        hitSlop={12}
+                        accessibilityRole="button"
+                        accessibilityLabel="Testi kapat"
+                    >
                         <Ionicons name="close" size={18} color={palette.textSecondary} />
                     </Pressable>
                 </View>
@@ -338,19 +412,25 @@ export default function QuizPlayScreen() {
             >
                 {bootError ? <Text style={styles.errorText}>{bootError}</Text> : null}
 
-                {!currentQuestion && isGenerating ? (
+                {/* Yukleme durumu artik banka yolunu da kapsiyor: `isGenerating`
+                    yalnizca AI uretiminde kalkiyordu, bu yuzden bankadan soru
+                    cekilirken ekran bos gorunup "Akisi Tekrar Baslat" butonunu
+                    gosteriyordu. */}
+                {!currentQuestion && (isGenerating || !hasAttemptedBoot) ? (
                     <View style={styles.stateWrap}>
                         <SkeletonCard height={96} />
-                        <Text style={styles.stateText}>İlk soru hazırlanıyor...</Text>
+                        <Text style={styles.stateText}>Soru hazırlanıyor...</Text>
                     </View>
                 ) : null}
 
-                {!currentQuestion && !isGenerating ? (
+                {!currentQuestion && !isGenerating && hasAttemptedBoot ? (
                     <Pressable
                         onPress={() => {
                             hasBootstrappedRef.current = true;
                             void bootstrapQuestion();
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Akışı tekrar başlat"
                         style={({ pressed }) => [
                             styles.secondaryButton,
                             pressed ? styles.pressed : null,
@@ -375,20 +455,39 @@ export default function QuizPlayScreen() {
                                     return;
                                 }
                                 setWrongAnswerExplanation(null);
-                                setAnsweredCount((previous) => previous + 1);
+                                setAnswerError(null);
+
                                 const isCorrect =
                                     option.trim().charAt(0).toUpperCase() ===
                                     currentQuestion.dogruCevap.trim().charAt(0).toUpperCase();
 
                                 void submitAnswer(option)
-                                    .then(() => {
+                                    .then((wasRecorded) => {
+                                        // Sayaclar ancak cevap gercekten
+                                        // kaydedildikten sonra artiyor. Onceden
+                                        // `answeredCount` istekten once
+                                        // artiriliyordu: ag hatasinda soru
+                                        // "cozuldu ama yanlis" sayilip test
+                                        // ozetini bozuyordu. `wasRecorded`
+                                        // false ise bu cift dokunusun ikinci
+                                        // cagrisi, sayilmamali.
+                                        if (!wasRecorded) {
+                                            return;
+                                        }
+
+                                        setAnsweredCount((previous) => previous + 1);
                                         if (isCorrect) {
                                             setCorrectCount((previous) => previous + 1);
                                         }
                                     })
-                                    // Hata durumu useQuiz icinde zaten ekrana
-                                    // yansiyor; burada yutulmasi yeterli.
-                                    .catch(() => undefined);
+                                    .catch((submitError) => {
+                                        setAnswerError(
+                                            localizeError(
+                                                submitError,
+                                                'Cevabın kaydedilemedi.'
+                                            )
+                                        );
+                                    });
                             }}
                         />
                         {isSubmittingAnswer ? (
@@ -399,6 +498,17 @@ export default function QuizPlayScreen() {
                             />
                         ) : null}
                     </AnimatedCard>
+                ) : null}
+
+                {/* Cevap kaydedilemedi: soru ekranda kaliyor, kullanici ayni
+                    sikka tekrar dokunarak yeniden deneyebiliyor. */}
+                {answerError ? (
+                    <View style={styles.answerErrorRow}>
+                        <Ionicons name="alert-circle" size={16} color={palette.danger} />
+                        <Text style={styles.answerErrorText}>
+                            {answerError} Şıkka tekrar dokunarak yeniden deneyebilirsin.
+                        </Text>
+                    </View>
                 ) : null}
 
                 {answerFeedback ? (
@@ -461,6 +571,12 @@ export default function QuizPlayScreen() {
                                     void handleExplainWrong();
                                 }}
                                 disabled={isExplaining}
+                                accessibilityRole="button"
+                                accessibilityLabel="Bu soru için derin analiz iste"
+                                accessibilityState={{
+                                    disabled: isExplaining,
+                                    busy: isExplaining,
+                                }}
                                 style={({ pressed }) => [
                                     styles.deepAnalysisButton,
                                     pressed ? styles.pressed : null,
@@ -497,12 +613,36 @@ export default function QuizPlayScreen() {
                 ) : null}
 
                 {isSessionFinished ? (
-                    <View style={styles.summaryBox}>
+                    <AnimatedCard style={styles.summaryBox} delayMs={80} resetKey="summary">
+                        <Ionicons name="trophy" size={26} color={palette.accent} />
                         <Text style={styles.summaryTitle}>Test tamamlandı</Text>
+
+                        <View style={styles.summaryStatRow}>
+                            <View style={styles.summaryStat}>
+                                <Text style={styles.summaryStatValue}>
+                                    %{sessionAccuracy}
+                                </Text>
+                                <Text style={styles.summaryStatLabel}>Başarı</Text>
+                            </View>
+                            <View style={styles.summaryStatDivider} />
+                            <View style={styles.summaryStat}>
+                                <Text style={styles.summaryStatValue}>{correctCount}</Text>
+                                <Text style={styles.summaryStatLabel}>Doğru</Text>
+                            </View>
+                            <View style={styles.summaryStatDivider} />
+                            <View style={styles.summaryStat}>
+                                <Text style={styles.summaryStatValue}>
+                                    {Math.max(0, answeredCount - correctCount)}
+                                </Text>
+                                <Text style={styles.summaryStatLabel}>Yanlış</Text>
+                            </View>
+                        </View>
+
                         <Text style={styles.summaryText}>
-                            {sessionQuestionCount} sorudan {correctCount} doğru
+                            {answeredCount} soru çözdün. Yanlışların konu başarına
+                            yansıdı; ana sayfadaki öneriler buna göre güncellenir.
                         </Text>
-                    </View>
+                    </AnimatedCard>
                 ) : null}
             </ScrollView>
 
@@ -510,21 +650,48 @@ export default function QuizPlayScreen() {
             {answerFeedback ? (
                 <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
                     {isSessionFinished ? (
-                        <Pressable
-                            onPress={closeFlow}
-                            style={({ pressed }) => [
-                                styles.primaryButton,
-                                pressed ? styles.pressed : null,
-                            ]}
-                        >
-                            <Text style={styles.primaryButtonText}>Testi Bitir</Text>
-                        </Pressable>
+                        <View style={styles.footerRow}>
+                            {/* Cikis artik geldigi konu ekranina donuyor:
+                                kullanici guncellenen "cozuldu" sayilarini
+                                hemen goruyor. */}
+                            <Pressable
+                                onPress={closeFlow}
+                                accessibilityRole="button"
+                                accessibilityLabel="Konuya dön"
+                                style={({ pressed }) => [
+                                    styles.primaryButton,
+                                    styles.footerFlex,
+                                    pressed ? styles.pressed : null,
+                                ]}
+                            >
+                                <Text style={styles.primaryButtonText}>Konuya Dön</Text>
+                            </Pressable>
+
+                            <Pressable
+                                onPress={() => router.replace('/(tabs)')}
+                                accessibilityRole="button"
+                                accessibilityLabel="Ana sayfaya git"
+                                style={({ pressed }) => [
+                                    styles.secondaryButton,
+                                    styles.footerFlex,
+                                    pressed ? styles.pressed : null,
+                                ]}
+                            >
+                                <Text style={styles.secondaryButtonText}>Ana Sayfa</Text>
+                            </Pressable>
+                        </View>
                     ) : (
                         <Pressable
                             onPress={() => {
                                 void handleNextQuestion();
                             }}
                             disabled={isGenerating}
+                            accessibilityRole="button"
+                            accessibilityLabel="Sonraki soru"
+                            accessibilityState={{
+                                disabled: isGenerating,
+                                busy: isGenerating,
+                            }}
                             style={({ pressed }) => [
                                 styles.primaryButton,
                                 pressed ? styles.pressed : null,
@@ -532,10 +699,15 @@ export default function QuizPlayScreen() {
                             ]}
                         >
                             {isGenerating ? (
-                                <ActivityIndicator
-                                    size="small"
-                                    color={palette.onDarkPrimary}
-                                />
+                                <>
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={palette.onDarkPrimary}
+                                    />
+                                    <Text style={styles.primaryButtonText}>
+                                        Hazırlanıyor...
+                                    </Text>
+                                </>
                             ) : (
                                 <>
                                     <Text style={styles.primaryButtonText}>Sonraki Soru</Text>
@@ -725,19 +897,61 @@ const styles = StyleSheet.create({
     },
     summaryBox: {
         alignItems: 'center',
-        gap: spacing.xs,
-        padding: spacing.md,
+        gap: spacing.sm,
+        padding: spacing.lg,
         borderRadius: radius.lg,
         borderWidth: 1,
         borderColor: palette.successBorder,
         backgroundColor: palette.successSurface,
     },
     summaryTitle: {
-        fontSize: 15,
+        fontSize: 17,
         fontWeight: '800',
         color: palette.teal900,
     },
+    summaryStatRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'stretch',
+        marginVertical: spacing.xs,
+    },
+    summaryStat: {
+        flex: 1,
+        alignItems: 'center',
+        gap: 2,
+    },
+    summaryStatDivider: {
+        width: 1,
+        height: 26,
+        backgroundColor: palette.successBorder,
+    },
+    summaryStatValue: {
+        fontSize: 20,
+        fontWeight: '800',
+        color: palette.teal900,
+    },
+    summaryStatLabel: {
+        ...uiType.small,
+        color: palette.textSecondary,
+    },
     summaryText: {
+        ...uiType.small,
+        color: palette.textSecondary,
+        textAlign: 'center',
+    },
+    answerErrorRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingHorizontal: spacing.md,
+        paddingVertical: spacing.sm,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.dangerBorder,
+        backgroundColor: palette.dangerSurface,
+    },
+    answerErrorText: {
+        flex: 1,
         ...uiType.small,
         color: palette.textSecondary,
     },
@@ -747,6 +961,17 @@ const styles = StyleSheet.create({
         backgroundColor: palette.pageBg,
         borderTopWidth: 1,
         borderTopColor: palette.cardBorder,
+    },
+    footerRow: {
+        flexDirection: 'row',
+        gap: spacing.sm,
+    },
+    footerFlex: {
+        flex: 1,
+    },
+    stateButton: {
+        alignSelf: 'stretch',
+        marginTop: spacing.sm,
     },
     primaryButton: {
         flexDirection: 'row',
@@ -784,18 +1009,6 @@ const styles = StyleSheet.create({
         ...uiType.body,
         color: palette.textMuted,
         textAlign: 'center',
-    },
-    stateLinkButton: {
-        alignSelf: 'flex-start',
-        marginTop: spacing.sm,
-        backgroundColor: palette.primary,
-        color: palette.onDarkPrimary,
-        borderRadius: radius.md,
-        overflow: 'hidden',
-        paddingVertical: 11,
-        paddingHorizontal: 16,
-        fontSize: 14,
-        fontWeight: '700',
     },
     errorTitle: {
         color: palette.danger,

@@ -22,6 +22,13 @@ import { useProgress } from '../../src/hooks/useProgress';
 import { supabase } from '../../src/services/supabase';
 import { palette, radius, spacing, uiType } from '../../src/theme/tokens';
 
+/** Bir konu icin ana sayfadan test baslatmak icin gereken bilgi. */
+interface TopicLaunchInfo {
+    sourceId: string;
+    /** Konuda henuz cozulmemis soru sayisi. */
+    remainingCount: number;
+}
+
 function formatRelativeTime(value: string | null): string {
     if (!value) {
         return '';
@@ -102,7 +109,7 @@ export default function DashboardScreen() {
     const insets = useSafeAreaInsets();
     const { session } = useAuth();
     const {
-        progressByTopic,
+        studiedTopics,
         todayPriorityTopics,
         isLoading,
         isRefreshing,
@@ -121,9 +128,8 @@ export default function DashboardScreen() {
         refresh: refreshStats,
     } = useDashboardStats();
 
-    const [sourceIdByTopicId, setSourceIdByTopicId] = useState<Record<string, string>>({});
-    const [questionCountByTopicId, setQuestionCountByTopicId] = useState<
-        Record<string, number>
+    const [launchInfoByTopicId, setLaunchInfoByTopicId] = useState<
+        Record<string, TopicLaunchInfo>
     >({});
 
     const displayName = resolveDisplayName(
@@ -132,9 +138,13 @@ export default function DashboardScreen() {
     );
 
     // %80 ve uzeri konular oneri listesinden dusuyor; aksi halde ustalasilmis
-    // konular da "tekrar et" diye gosterilirdi.
+    // konular da "tekrar et" diye gosterilirdi. Hic calisilmamis konular
+    // listede kaliyor ama ayri rozetle: onlar "tekrar" degil, "yeni".
     const suggestedTopics = useMemo(
-        () => todayPriorityTopics.filter((item) => item.accuracy < 80).slice(0, 5),
+        () =>
+            todayPriorityTopics
+                .filter((item) => item.totalAttempts === 0 || item.accuracy < 80)
+                .slice(0, 5),
         [todayPriorityTopics]
     );
 
@@ -143,50 +153,64 @@ export default function DashboardScreen() {
         [suggestedTopics]
     );
 
+    const userId = session?.user?.id;
+
     useEffect(() => {
-        if (topicIds.length === 0) {
-            setSourceIdByTopicId({});
-            setQuestionCountByTopicId({});
+        if (topicIds.length === 0 || !userId) {
+            setLaunchInfoByTopicId({});
             return;
         }
 
         let cancelled = false;
 
-        const loadTopicSources = async () => {
+        const loadTopicLaunchInfo = async () => {
             const [
-                { data, error: topicError },
+                { data: topicRows, error: topicError },
                 { data: questionRows },
+                { data: logRows },
             ] = await Promise.all([
                 supabase.from('topics').select('id, source_id').in('id', topicIds),
-                // Testin uzunlugu konudaki hazir soru sayisi kadar; play
-                // ekranina parametre olarak gidiyor.
-                supabase.from('questions').select('topic_id').in('topic_id', topicIds),
+                supabase.from('questions').select('id, topic_id').in('topic_id', topicIds),
+                // Testin uzunlugu konudaki COZULMEMIS soru sayisi kadar;
+                // toplam sayi gonderilirse kullanici her donuste "1 / 40"
+                // goruyor ve ilerlemesi yokmus gibi hissediyor.
+                supabase.from('question_logs').select('question_id').eq('user_id', userId),
             ]);
 
-            if (cancelled || topicError || !data) {
+            if (cancelled || topicError || !topicRows) {
                 return;
             }
 
-            const next: Record<string, string> = {};
-            for (const row of data) {
-                next[row.id] = row.source_id;
-            }
+            const solvedQuestionIds = new Set(
+                (logRows ?? []).map((row) => row.question_id)
+            );
 
-            const counts: Record<string, number> = {};
+            const remainingByTopicId: Record<string, number> = {};
             for (const row of questionRows ?? []) {
-                counts[row.topic_id] = (counts[row.topic_id] ?? 0) + 1;
+                if (solvedQuestionIds.has(row.id)) {
+                    continue;
+                }
+                remainingByTopicId[row.topic_id] =
+                    (remainingByTopicId[row.topic_id] ?? 0) + 1;
             }
 
-            setSourceIdByTopicId(next);
-            setQuestionCountByTopicId(counts);
+            const next: Record<string, TopicLaunchInfo> = {};
+            for (const row of topicRows) {
+                next[row.id] = {
+                    sourceId: row.source_id,
+                    remainingCount: remainingByTopicId[row.id] ?? 0,
+                };
+            }
+
+            setLaunchInfoByTopicId(next);
         };
 
-        void loadTopicSources();
+        void loadTopicLaunchInfo();
 
         return () => {
             cancelled = true;
         };
-    }, [topicIds]);
+    }, [topicIds, userId]);
 
     const handleRefresh = useCallback(() => {
         void refresh(true);
@@ -237,13 +261,38 @@ export default function DashboardScreen() {
 
                     <Pressable
                         onPress={() => router.push('/(tabs)/profile')}
+                        accessibilityRole="button"
+                        accessibilityLabel="Profilini aç"
                         style={({ pressed }) => [styles.avatar, pressed ? styles.pressed : null]}
                     >
                         <Ionicons name="person" size={20} color={palette.teal800} />
                     </Pressable>
                 </View>
 
-                {combinedError ? <Text style={styles.errorText}>{combinedError}</Text> : null}
+                {combinedError ? (
+                    <View style={styles.errorCard}>
+                        <View style={styles.errorHead}>
+                            <Ionicons
+                                name="cloud-offline-outline"
+                                size={17}
+                                color={palette.danger}
+                            />
+                            <Text style={styles.errorText}>{combinedError}</Text>
+                        </View>
+                        <Pressable
+                            onPress={handleRefresh}
+                            accessibilityRole="button"
+                            accessibilityLabel="Tekrar dene"
+                            style={({ pressed }) => [
+                                styles.retryButton,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Ionicons name="refresh" size={14} color={palette.accent} />
+                            <Text style={styles.retryText}>Tekrar dene</Text>
+                        </Pressable>
+                    </View>
+                ) : null}
 
                 {busy ? (
                     <SkeletonCard />
@@ -276,8 +325,13 @@ export default function DashboardScreen() {
                         </View>
 
                         <AnimatedCard delayMs={10} resetKey="topic-chart">
+                            {/* Yalnizca gercekten calisilmis konular. Filtresiz
+                                halinde liste basariya gore artan sirali oldugu
+                                icin grafigin ilk bes satiri her zaman hic
+                                acilmamis, "%0" gorunen konulardi. */}
                             <TopicAccuracyChart
-                                items={progressByTopic.map((item) => ({
+                                items={studiedTopics.map((item) => ({
+                                    topicId: item.topicId,
                                     topicName: item.topicName,
                                     accuracy: item.accuracy,
                                 }))}
@@ -287,7 +341,7 @@ export default function DashboardScreen() {
                         <View style={styles.section}>
                             <View style={styles.sectionHead}>
                                 <Ionicons name="sparkles" size={15} color={palette.accent} />
-                                <Text style={styles.sectionTitle}>Öncelikli Tekrar</Text>
+                                <Text style={styles.sectionTitle}>Öncelikli Konular</Text>
                             </View>
 
                             {suggestedTopics.length === 0 ? (
@@ -295,52 +349,95 @@ export default function DashboardScreen() {
                                     Şu an %80 altında konun yok. Seriyi bozma!
                                 </Text>
                             ) : (
-                                <View style={styles.chipWrap}>
-                                    {suggestedTopics.map((item) => {
-                                        const sourceId = sourceIdByTopicId[item.topicId];
+                                <>
+                                    <View style={styles.chipWrap}>
+                                        {suggestedTopics.map((item) => {
+                                            const launchInfo =
+                                                launchInfoByTopicId[item.topicId];
+                                            const isReady = Boolean(launchInfo);
+                                            const isNew = item.totalAttempts === 0;
 
-                                        return (
-                                            <Pressable
-                                                key={item.topicId}
-                                                disabled={!sourceId}
-                                                onPress={() => {
-                                                    void Haptics.impactAsync(
-                                                        Haptics.ImpactFeedbackStyle.Light
-                                                    );
-                                                    router.push({
-                                                        pathname: '/quiz/[sourceId]/play',
-                                                        params: {
-                                                            sourceId,
-                                                            topicId: item.topicId,
-                                                            count: String(
-                                                                questionCountByTopicId[
-                                                                    item.topicId
-                                                                ] ?? 0
-                                                            ),
-                                                        },
-                                                    });
-                                                }}
-                                                style={({ pressed }) => [
-                                                    styles.chip,
-                                                    pressed ? styles.pressed : null,
-                                                    !sourceId ? styles.chipDisabled : null,
-                                                ]}
-                                            >
-                                                <Ionicons
-                                                    name="sparkles"
-                                                    size={11}
-                                                    color={palette.accent}
-                                                />
-                                                <Text
-                                                    style={styles.chipText}
-                                                    numberOfLines={1}
+                                            return (
+                                                <Pressable
+                                                    key={item.topicId}
+                                                    disabled={!isReady}
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel={`${item.topicName} konusunda teste başla`}
+                                                    accessibilityHint={
+                                                        isReady
+                                                            ? isNew
+                                                                ? 'Bu konuya henüz başlamadın'
+                                                                : `Başarın yüzde ${Math.round(item.accuracy)}`
+                                                            : 'Konu bilgisi henüz yüklenmedi'
+                                                    }
+                                                    accessibilityState={{
+                                                        disabled: !isReady,
+                                                    }}
+                                                    onPress={() => {
+                                                        if (!launchInfo) {
+                                                            return;
+                                                        }
+
+                                                        void Haptics.impactAsync(
+                                                            Haptics.ImpactFeedbackStyle
+                                                                .Light
+                                                        );
+                                                        router.push({
+                                                            pathname:
+                                                                '/quiz/[sourceId]/play',
+                                                            params: {
+                                                                sourceId:
+                                                                    launchInfo.sourceId,
+                                                                topicId: item.topicId,
+                                                                count: String(
+                                                                    launchInfo.remainingCount
+                                                                ),
+                                                            },
+                                                        });
+                                                    }}
+                                                    style={({ pressed }) => [
+                                                        styles.chip,
+                                                        pressed ? styles.pressed : null,
+                                                        !isReady
+                                                            ? styles.chipDisabled
+                                                            : null,
+                                                    ]}
                                                 >
-                                                    {item.topicName}
-                                                </Text>
-                                            </Pressable>
-                                        );
-                                    })}
-                                </View>
+                                                    <Ionicons
+                                                        name={
+                                                            isNew
+                                                                ? 'sparkles'
+                                                                : 'refresh'
+                                                        }
+                                                        size={11}
+                                                        color={palette.accent}
+                                                    />
+                                                    <Text
+                                                        style={styles.chipText}
+                                                        numberOfLines={1}
+                                                    >
+                                                        {item.topicName}
+                                                    </Text>
+                                                    <Text style={styles.chipTag}>
+                                                        {isNew ? 'yeni' : 'tekrar'}
+                                                    </Text>
+                                                </Pressable>
+                                            );
+                                        })}
+                                    </View>
+
+                                    {/* Pasif chip'in sebebi eskiden hicbir yerde
+                                        yazmiyordu; kullanici dokunuyor, hicbir
+                                        sey olmuyordu. */}
+                                    {suggestedTopics.some(
+                                        (item) => !launchInfoByTopicId[item.topicId]
+                                    ) ? (
+                                        <Text style={styles.emptyText}>
+                                            Soluk görünen konuların bilgisi henüz
+                                            yüklenmedi. Aşağı çekerek yenileyebilirsin.
+                                        </Text>
+                                    ) : null}
+                                </>
                             )}
                         </View>
 
@@ -453,8 +550,10 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 5,
-        paddingVertical: 7,
-        paddingHorizontal: 12,
+        // Dokunma hedefi 44px'e yaklastirildi; onceden ~30px yuksekligindeydi.
+        minHeight: 40,
+        paddingVertical: 8,
+        paddingHorizontal: 13,
         borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: palette.primaryBorder,
@@ -469,6 +568,11 @@ const styles = StyleSheet.create({
         ...uiType.small,
         fontWeight: '700',
         color: palette.teal800,
+    },
+    chipTag: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: palette.textMuted,
     },
     activityCard: {
         flexDirection: 'row',
@@ -513,8 +617,40 @@ const styles = StyleSheet.create({
     pressed: {
         opacity: 0.7,
     },
+    errorCard: {
+        gap: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.dangerBorder,
+        backgroundColor: palette.dangerSurface,
+    },
+    errorHead: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    retryButton: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        minHeight: 36,
+        paddingHorizontal: 12,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.cardBg,
+    },
+    retryText: {
+        ...uiType.small,
+        fontWeight: '700',
+        color: palette.accent,
+    },
     errorText: {
+        flex: 1,
         color: palette.danger,
         fontSize: 13,
+        lineHeight: 19,
     },
 });

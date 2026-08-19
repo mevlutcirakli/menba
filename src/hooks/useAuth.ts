@@ -1,58 +1,88 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { hasSupabaseEnv, supabase, supabaseEnvErrorMessage } from '../services/supabase';
 
-export function useAuth() {
-    const [session, setSession] = useState<Session | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+interface AuthState {
+    session: Session | null;
+    isLoading: boolean;
+}
 
-    useEffect(() => {
-        if (!hasSupabaseEnv) {
-            console.error(supabaseEnvErrorMessage);
-            setSession(null);
-            setIsLoading(false);
-            return;
-        }
+/**
+ * Oturum durumu modul seviyesinde tek bir yerde tutuluyor.
+ *
+ * Onceden her `useAuth()` cagrisi kendi `getSession()` istegini atip kendi
+ * `onAuthStateChange` aboneligini aciyordu; hook uc ayri ekranda kullanildigi
+ * icin uygulama her acilista ucer kopya is yapiyordu. Store tek abonelik
+ * kurup sonucu tum tuketicilere dagitiyor.
+ */
+let state: AuthState = { session: null, isLoading: true };
+const listeners = new Set<() => void>();
+let initialized = false;
 
-        let isMounted = true;
+function setState(next: AuthState) {
+    // Referans esitligi korunursa useSyncExternalStore gereksiz render etmez.
+    if (state.session === next.session && state.isLoading === next.isLoading) {
+        return;
+    }
 
-        supabase.auth
-            .getSession()
-            .then(({ data, error }) => {
-                if (!isMounted) {
-                    return;
-                }
+    state = next;
+    for (const listener of listeners) {
+        listener();
+    }
+}
 
-                if (!error) {
-                    setSession(data.session ?? null);
-                }
+function initialize() {
+    if (initialized) {
+        return;
+    }
+    initialized = true;
 
-                setIsLoading(false);
-            })
-            .catch(() => {
-                if (!isMounted) {
-                    return;
-                }
+    if (!hasSupabaseEnv) {
+        console.error(supabaseEnvErrorMessage);
+        setState({ session: null, isLoading: false });
+        return;
+    }
 
-                setSession(null);
-                setIsLoading(false);
+    supabase.auth
+        .getSession()
+        .then(({ data, error }) => {
+            setState({
+                session: error ? null : (data.session ?? null),
+                isLoading: false,
             });
-
-        const {
-            data: { subscription },
-        } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-            setSession(nextSession);
-            setIsLoading(false);
+        })
+        .catch(() => {
+            setState({ session: null, isLoading: false });
         });
 
-        return () => {
-            isMounted = false;
-            subscription.unsubscribe();
-        };
-    }, []);
+    supabase.auth.onAuthStateChange((_event, nextSession) => {
+        setState({ session: nextSession, isLoading: false });
+    });
+}
+
+function subscribe(listener: () => void): () => void {
+    initialize();
+    listeners.add(listener);
+    return () => {
+        listeners.delete(listener);
+    };
+}
+
+function getSnapshot(): AuthState {
+    return state;
+}
+
+export function useAuth() {
+    const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
     return {
-        session,
-        isLoading,
+        session: snapshot.session,
+        isLoading: snapshot.isLoading,
+        /**
+         * Supabase adresi/anahtari derlemeye girmemisse true. Bu durumda hicbir
+         * istek calismaz; ekranlar sessizce "bir sorun olustu" demek yerine
+         * yapilandirma uyarisi gostermeli (bkz. app/_layout.tsx).
+         */
+        isMisconfigured: !hasSupabaseEnv,
     };
 }

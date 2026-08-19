@@ -14,7 +14,9 @@ interface StatTileProps {
  */
 export function StatTile({ label, value, icon }: StatTileProps) {
     return (
-        <View style={styles.tile}>
+        // Tek bir okuma birimi: ekran okuyucu "Başarı" ve "%78"i ayri ayri
+        // degil, birlikte okusun.
+        <View style={styles.tile} accessible accessibilityLabel={`${label}: ${value}`}>
             <View style={styles.headRow}>
                 <Ionicons name={icon} size={14} color={palette.accent} />
                 <Text style={styles.label} numberOfLines={1}>

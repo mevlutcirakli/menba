@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std/http/server.ts';
+import { handlePreflight, jsonHeaders } from '../_shared/cors.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 const GEMINI_MODEL =
@@ -382,19 +383,24 @@ function normalizeQuestions(
 }
 
 serve(async (req) => {
+    const preflight = handlePreflight(req);
+    if (preflight) {
+        return preflight;
+    }
+
     try {
         const { contentText, topicNames, maxQuestionsPerTopic = 3 } = await req.json();
 
         if (!contentText || typeof contentText !== 'string') {
             return new Response(JSON.stringify({ error: 'contentText zorunludur.' }), {
                 status: 400,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
         if (!Array.isArray(topicNames) || topicNames.length === 0) {
             return new Response(JSON.stringify({ questions: [] }), {
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -409,7 +415,7 @@ serve(async (req) => {
 
         if (cleanedTopicNames.length === 0) {
             return new Response(JSON.stringify({ questions: [] }), {
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -457,7 +463,7 @@ serve(async (req) => {
         if ('error' in geminiResult) {
             return new Response(JSON.stringify({ error: geminiResult.error }), {
                 status: 503,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -488,7 +494,7 @@ serve(async (req) => {
                         blockReason,
                     },
                 }),
-                { headers: { 'Content-Type': 'application/json' } }
+                { headers: jsonHeaders }
             );
         }
 
@@ -526,19 +532,19 @@ serve(async (req) => {
                         rejections,
                     },
                 }),
-                { headers: { 'Content-Type': 'application/json' } }
+                { headers: jsonHeaders }
             );
         }
 
         return new Response(JSON.stringify({ questions: parsedQuestions }), {
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders,
         });
     } catch (error) {
         return new Response(
             JSON.stringify({ error: error instanceof Error ? error.message : 'Bilinmeyen hata' }),
             {
                 status: 500,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             }
         );
     }

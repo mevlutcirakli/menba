@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     Pressable,
     RefreshControl,
@@ -187,11 +188,16 @@ export default function SourcesListScreen() {
     const handleDeleteSource = (sourceId: string, sourceTitle: string) => {
         const stats = sourceStatsById[sourceId];
 
+        // Istatistikler henuz gelmediyse "0 konu, 0 soru silinecek" yazmak
+        // yaniltici: geri alinamaz bir islem icin yanlis bilgi vermektense
+        // sayilari hic vermemek dogru.
+        const detail = stats
+            ? `Silinecek veri: ${stats.topicCount} konu, ${stats.questionCount} soru ve bu sorulara ait çözüm geçmişi.`
+            : 'Bu kaynağa ait tüm konular, sorular ve çözüm geçmişi silinecek.';
+
         Alert.alert(
             'Kaynağı Sil',
-            `"${sourceTitle}" silinecek.\n\nBu işlem geri alınamaz.\nSilinecek veri: ${
-                stats?.topicCount ?? 0
-            } konu, ${stats?.questionCount ?? 0} soru ve bu sorulara ait log kayıtları.`,
+            `"${sourceTitle}" silinecek.\n\nBu işlem geri alınamaz.\n${detail}`,
             [
                 { text: 'Vazgeç', style: 'cancel' },
                 {
@@ -237,6 +243,8 @@ export default function SourcesListScreen() {
                     onPress={openAddSource}
                     style={({ pressed }) => [styles.addButton, pressed ? styles.pressed : null]}
                     hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Yeni kaynak ekle"
                 >
                     <Ionicons name="add" size={22} color={palette.onDarkPrimary} />
                 </Pressable>
@@ -263,10 +271,17 @@ export default function SourcesListScreen() {
                             onChangeText={setSearchText}
                             placeholder="Kaynaklarında ara..."
                             placeholderTextColor={palette.textMuted}
+                            accessibilityLabel="Kaynaklarında ara"
                             style={styles.searchInput}
                         />
                         {searchText.length > 0 ? (
-                            <Pressable onPress={() => setSearchText('')} hitSlop={8}>
+                            <Pressable
+                                onPress={() => setSearchText('')}
+                                hitSlop={14}
+                                accessibilityRole="button"
+                                accessibilityLabel="Aramayı temizle"
+                                style={styles.searchClear}
+                            >
                                 <Ionicons
                                     name="close-circle"
                                     size={17}
@@ -277,7 +292,30 @@ export default function SourcesListScreen() {
                     </View>
                 ) : null}
 
-                {error ? <Text style={styles.errorText}>{error}</Text> : null}
+                {error ? (
+                    <View style={styles.errorCard}>
+                        <View style={styles.errorHead}>
+                            <Ionicons
+                                name="cloud-offline-outline"
+                                size={17}
+                                color={palette.danger}
+                            />
+                            <Text style={styles.errorText}>{error}</Text>
+                        </View>
+                        <Pressable
+                            onPress={() => void fetchSources()}
+                            accessibilityRole="button"
+                            accessibilityLabel="Tekrar dene"
+                            style={({ pressed }) => [
+                                styles.retryButton,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Ionicons name="refresh" size={14} color={palette.accent} />
+                            <Text style={styles.retryText}>Tekrar dene</Text>
+                        </Pressable>
+                    </View>
+                ) : null}
                 {actionError ? <Text style={styles.errorText}>{actionError}</Text> : null}
 
                 {isLoading ? <SkeletonCard height={96} /> : null}
@@ -323,12 +361,24 @@ export default function SourcesListScreen() {
                     return (
                         <AnimatedCard
                             key={source.id}
+                            // Silme butonu karta ic ice degil, yanina
+                            // koyuluyor: ic ice Pressable'da hedefi 2px
+                            // iskalayan dokunus kaynagi acmaya gidiyordu.
+                            style={styles.sourceRow}
                             delayMs={Math.min(240, index * 40)}
                             resetKey={source.id}
                         >
                             <Pressable
                                 onPress={() => router.push(`/quiz/${source.id}`)}
                                 disabled={isDeleting}
+                                accessibilityRole="button"
+                                accessibilityLabel={`${source.title} kaynağını aç`}
+                                accessibilityHint={
+                                    stats
+                                        ? `${stats.topicCount} konu, ${stats.questionCount} soru`
+                                        : undefined
+                                }
+                                accessibilityState={{ disabled: isDeleting }}
                                 style={({ pressed }) => [
                                     styles.sourceCard,
                                     pressed ? styles.cardPressed : null,
@@ -346,24 +396,31 @@ export default function SourcesListScreen() {
                                 </View>
 
                                 <ProgressRing value={stats?.completion ?? 0} />
+                            </Pressable>
 
-                                <Pressable
-                                    onPress={() =>
-                                        handleDeleteSource(source.id, source.title)
-                                    }
-                                    disabled={isDeleting}
-                                    style={({ pressed }) => [
-                                        styles.deleteButton,
-                                        pressed ? styles.deleteButtonPressed : null,
-                                    ]}
-                                    hitSlop={8}
-                                >
+                            <Pressable
+                                onPress={() => handleDeleteSource(source.id, source.title)}
+                                disabled={isDeleting}
+                                accessibilityRole="button"
+                                accessibilityLabel={`${source.title} kaynağını sil`}
+                                accessibilityState={{
+                                    disabled: isDeleting,
+                                    busy: isDeleting,
+                                }}
+                                style={({ pressed }) => [
+                                    styles.deleteButton,
+                                    pressed ? styles.deleteButtonPressed : null,
+                                ]}
+                            >
+                                {isDeleting ? (
+                                    <ActivityIndicator size="small" color={palette.danger} />
+                                ) : (
                                     <Ionicons
                                         name="trash-outline"
-                                        size={17}
+                                        size={18}
                                         color={palette.textMuted}
                                     />
-                                </Pressable>
+                                )}
                             </Pressable>
                         </AnimatedCard>
                     );
@@ -421,7 +478,19 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: palette.textPrimary,
     },
+    searchClear: {
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sourceRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+    },
     sourceCard: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         gap: spacing.md,
@@ -435,8 +504,8 @@ const styles = StyleSheet.create({
         backgroundColor: palette.primarySurface,
     },
     deleteButton: {
-        width: 34,
-        height: 34,
+        width: 46,
+        height: 46,
         borderRadius: radius.md,
         alignItems: 'center',
         justifyContent: 'center',
@@ -510,8 +579,40 @@ const styles = StyleSheet.create({
     disabled: {
         opacity: 0.5,
     },
+    errorCard: {
+        gap: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.dangerBorder,
+        backgroundColor: palette.dangerSurface,
+    },
+    errorHead: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    retryButton: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        minHeight: 36,
+        paddingHorizontal: 12,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.cardBg,
+    },
+    retryText: {
+        ...uiType.small,
+        fontWeight: '700',
+        color: palette.accent,
+    },
     errorText: {
+        flex: 1,
         color: palette.danger,
         fontSize: 13,
+        lineHeight: 19,
     },
 });

@@ -2,8 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useNavigation, useRouter } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Pressable,
@@ -17,9 +17,11 @@ import {
     MAX_PROCESSED_CONTENT_CHARS,
     useSources,
     type IngestMode,
+    type IngestProgress,
 } from '../src/hooks/useSources';
 import { extractSourceTextFromFile } from '../src/services/geminiService';
 import { palette, radius, spacing, uiType } from '../src/theme/tokens';
+import { localizeError } from '../src/utils/errors';
 
 // Ekranda yazan sinir bu sabitten turetiliyor ki etiket ile gercek davranis
 // birbirinden ayrilmasin. Dosya sinirinin ustunde bir de icerik siniri var
@@ -27,8 +29,16 @@ import { palette, radius, spacing, uiType } from '../src/theme/tokens';
 // isleyeceginden uzun metinler icin asagida ayrica uyari cikiyor.
 const MAX_IMPORT_FILE_SIZE_MB = 4;
 const MAX_IMPORT_FILE_SIZE_BYTES = MAX_IMPORT_FILE_SIZE_MB * 1024 * 1024;
+// base64 kodlama ham boyutu ~4/3 buyutur; boyutu onceden bildirilmeyen
+// dosyalarda sinir okuduktan sonra bunun uzerinden kontrol ediliyor.
+const MAX_IMPORT_BASE64_LENGTH = Math.ceil((MAX_IMPORT_FILE_SIZE_BYTES * 4) / 3);
 
 type ImportStatus = 'idle' | 'processing' | 'success' | 'error';
+
+interface CreatedSourceSummary {
+    sourceId: string;
+    message: string;
+}
 
 // Ekran tek modda calisiyor: dosyadan dogrudan soru bankasi uretiliyor.
 const INGEST_MODE: IngestMode = 'questions-only';
@@ -50,6 +60,7 @@ const CATEGORY_SUGGESTION_LIMIT = 6;
 
 export default function AddSourceScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
     const { createSource, sources } = useSources();
     const [title, setTitle] = useState('');
     const [category, setCategory] = useState('');
@@ -60,7 +71,17 @@ export default function AddSourceScreen() {
     const [importStatusText, setImportStatusText] = useState<string | null>(null);
     const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
-    const [formInfo, setFormInfo] = useState<string | null>(null);
+    const [createdSource, setCreatedSource] = useState<CreatedSourceSummary | null>(null);
+    const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
+
+    const isBusy = isSubmitting || isImportingFile;
+
+    // Uzun suren yukleme sirasinda sheet'in asagi surukleyerek kapatilmasi
+    // engelleniyor: is arka planda devam ediyor ama kullanici sonucu bir daha
+    // hic goremiyordu.
+    useEffect(() => {
+        navigation.setOptions({ gestureEnabled: !isSubmitting });
+    }, [isSubmitting, navigation]);
 
     // Oneriler kullanicinin kendi kaynaklarindan geliyor: uygulama alandan
     // bagimsiz, "YDS" gibi sabit bir liste herkese uymuyor.
@@ -86,18 +107,49 @@ export default function AddSourceScreen() {
         router.replace('/(tabs)/sources');
     };
 
+    const openCreatedSource = (sourceId: string) => {
+        closeSheet();
+        // Sheet kapanma animasyonu bitmeden yapilan push yutuluyor; kisa
+        // gecikme yonlendirmenin guvenilir calismasini sagliyor.
+        setTimeout(() => {
+            router.push({ pathname: '/quiz/[sourceId]', params: { sourceId } });
+        }, 350);
+    };
+
+    const resetForNextSource = () => {
+        setCreatedSource(null);
+        setTitle('');
+        setCategory('');
+        setContentText('');
+        setSelectedFileName(null);
+        setImportStatus('idle');
+        setImportStatusText(null);
+        setFormError(null);
+        setIngestProgress(null);
+    };
+
     const handlePickFile = async () => {
         setFormError(null);
-        setFormInfo(null);
+        setCreatedSource(null);
         setImportStatus('idle');
         setImportStatusText(null);
         setSelectedFileName(null);
 
-        const result = await DocumentPicker.getDocumentAsync({
-            type: ['text/plain', 'application/pdf'],
-            multiple: false,
-            copyToCacheDirectory: true,
-        });
+        let result: DocumentPicker.DocumentPickerResult;
+        try {
+            result = await DocumentPicker.getDocumentAsync({
+                type: ['text/plain', 'application/pdf'],
+                multiple: false,
+                copyToCacheDirectory: true,
+            });
+        } catch (pickError) {
+            // Secici izin/saglayici hatasi verirse butona basmak eskiden
+            // hicbir sey yapmiyor gibi gorunuyordu.
+            setImportStatus('error');
+            setImportStatusText('Dosya seçici açılamadı.');
+            setFormError(localizeError(pickError, 'Dosya seçici açılamadı.'));
+            return;
+        }
 
         if (result.canceled || result.assets.length === 0) {
             return;
@@ -136,11 +188,7 @@ export default function AddSourceScreen() {
             } catch (readError) {
                 setImportStatus('error');
                 setImportStatusText('Metin dosyası okunamadı.');
-                setFormError(
-                    readError instanceof Error
-                        ? readError.message
-                        : 'Dosya okunamadı. Lütfen tekrar dene.'
-                );
+                setFormError(localizeError(readError, 'Dosya okunamadı.'));
             }
             return;
         }
@@ -154,6 +202,17 @@ export default function AddSourceScreen() {
                 const base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, {
                     encoding: FileSystemLegacy.EncodingType.Base64,
                 });
+
+                // Bazi Android saglayicilari asset.size vermiyor; sinir o
+                // durumda sessizce atlaniyordu.
+                if (base64Data.length > MAX_IMPORT_BASE64_LENGTH) {
+                    setImportStatus('error');
+                    setImportStatusText('Dosya boyutu limiti aşıldı.');
+                    setFormError(
+                        `Bu dosya ${MAX_IMPORT_FILE_SIZE_MB}MB sınırını aşıyor. Daha küçük bir dosya dene.`
+                    );
+                    return;
+                }
 
                 const extractedText = await extractSourceTextFromFile({
                     base64Data,
@@ -176,11 +235,7 @@ export default function AddSourceScreen() {
             } catch (extractError) {
                 setImportStatus('error');
                 setImportStatusText('PDF işleme başarısız oldu.');
-                setFormError(
-                    extractError instanceof Error
-                        ? extractError.message
-                        : 'PDF işlenirken hata oluştu. Lütfen tekrar dene.'
-                );
+                setFormError(localizeError(extractError, 'PDF işlenirken hata oluştu.'));
             } finally {
                 setIsImportingFile(false);
             }
@@ -211,7 +266,8 @@ export default function AddSourceScreen() {
 
         setIsSubmitting(true);
         setFormError(null);
-        setFormInfo(null);
+        setCreatedSource(null);
+        setIngestProgress({ label: 'Başlatılıyor...', completed: 0, total: 0 });
 
         try {
             const result = await createSource({
@@ -221,6 +277,7 @@ export default function AddSourceScreen() {
                 sourceType: category.trim() || undefined,
                 topicNames: [],
                 ingestMode: INGEST_MODE,
+                onProgress: setIngestProgress,
             });
 
             if (result.warning) {
@@ -242,26 +299,102 @@ export default function AddSourceScreen() {
                     ? ` ${result.skippedUngroundedQuestionCount} soru kaynak metinde bulunamadığı için elendi.`
                     : '';
 
-            setFormInfo(
-                `Kaynak kaydedildi: ${result.insertedQuestionCount} soru, ${result.insertedTopicCount} konu eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`
-            );
+            setCreatedSource({
+                sourceId: result.sourceId,
+                message: `${result.insertedQuestionCount} soru, ${result.insertedTopicCount} konu eklendi.${duplicateInfo}${similarInfo}${ungroundedInfo}`,
+            });
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-            setTitle('');
-            setContentText('');
-            setSelectedFileName(null);
-            setImportStatus('idle');
         } catch (createError) {
-            setFormError(
-                createError instanceof Error ? createError.message : 'Kaynak kaydedilemedi.'
-            );
+            setFormError(localizeError(createError, 'Kaynak kaydedilemedi.'));
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         } finally {
             setIsSubmitting(false);
+            setIngestProgress(null);
         }
     };
 
-    const isBusy = isSubmitting || isImportingFile;
+    // Kayit bittikten sonra form yerine ne yapabilecegini soyleyen bir ozet
+    // gosteriliyor. Onceden sheet acik kaliyor, tek cikis "Iptal" oluyordu.
+    if (createdSource) {
+        return (
+            <View style={styles.sheet}>
+                <View style={styles.grabber} />
+
+                <ScrollView
+                    contentContainerStyle={styles.container}
+                    showsVerticalScrollIndicator={false}
+                >
+                    <View style={styles.doneIcon}>
+                        <Ionicons
+                            name="checkmark-circle"
+                            size={34}
+                            color={palette.success}
+                        />
+                    </View>
+
+                    <Text style={styles.sheetTitle}>Kaynak hazır</Text>
+                    <Text style={styles.doneBody}>{createdSource.message}</Text>
+
+                    {formError ? (
+                        <View style={[styles.statusRow, styles.statusRowWarning]}>
+                            <Ionicons
+                                name="information-circle"
+                                size={16}
+                                color={palette.amber600}
+                            />
+                            <Text style={styles.statusText}>{formError}</Text>
+                        </View>
+                    ) : null}
+
+                    <Pressable
+                        onPress={() => openCreatedSource(createdSource.sourceId)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Kaynağı aç ve teste başla"
+                        style={({ pressed }) => [
+                            styles.submitButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Ionicons
+                            name="play"
+                            size={15}
+                            color={palette.onDarkPrimary}
+                        />
+                        <Text style={styles.submitButtonText}>Kaynağı Aç</Text>
+                    </Pressable>
+
+                    <Pressable
+                        onPress={resetForNextSource}
+                        accessibilityRole="button"
+                        accessibilityLabel="Yeni bir kaynak daha ekle"
+                        style={({ pressed }) => [
+                            styles.secondaryButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Text style={styles.secondaryButtonText}>Bir Kaynak Daha Ekle</Text>
+                    </Pressable>
+
+                    <Pressable
+                        onPress={closeSheet}
+                        accessibilityRole="button"
+                        accessibilityLabel="Kapat"
+                        style={({ pressed }) => [
+                            styles.cancelButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Text style={styles.cancelButtonText}>Kapat</Text>
+                    </Pressable>
+                </ScrollView>
+            </View>
+        );
+    }
+
+    const progressRatio =
+        ingestProgress && ingestProgress.total > 0
+            ? Math.min(1, ingestProgress.completed / ingestProgress.total)
+            : null;
 
     return (
         <View style={styles.sheet}>
@@ -286,6 +419,10 @@ export default function AddSourceScreen() {
                     ]}
                     onPress={() => void handlePickFile()}
                     disabled={isBusy}
+                    accessibilityRole="button"
+                    accessibilityLabel="PDF veya metin dosyası seç"
+                    accessibilityHint={`En fazla ${MAX_IMPORT_FILE_SIZE_MB} megabayt`}
+                    accessibilityState={{ disabled: isBusy, busy: isImportingFile }}
                 >
                     <View style={styles.dropzoneIcon}>
                         {isImportingFile ? (
@@ -367,6 +504,8 @@ export default function AddSourceScreen() {
                     onChangeText={setTitle}
                     placeholder="Örn: 3. Ünite Ders Notları"
                     placeholderTextColor={palette.textMuted}
+                    editable={!isSubmitting}
+                    accessibilityLabel="Kaynak adı"
                     style={styles.input}
                 />
 
@@ -376,6 +515,8 @@ export default function AddSourceScreen() {
                     onChangeText={setCategory}
                     placeholder="Örn: Ticaret Hukuku (isteğe bağlı)"
                     placeholderTextColor={palette.textMuted}
+                    editable={!isSubmitting}
+                    accessibilityLabel="Kategori, isteğe bağlı"
                     style={styles.input}
                 />
 
@@ -388,6 +529,11 @@ export default function AddSourceScreen() {
                                 <Pressable
                                     key={suggestion}
                                     onPress={() => setCategory(isActive ? '' : suggestion)}
+                                    disabled={isSubmitting}
+                                    hitSlop={8}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Kategori: ${suggestion}`}
+                                    accessibilityState={{ selected: isActive }}
                                     style={({ pressed }) => [
                                         styles.suggestionChip,
                                         isActive ? styles.suggestionChipActive : null,
@@ -411,7 +557,47 @@ export default function AddSourceScreen() {
                     </View>
                 ) : null}
 
-                {formInfo ? <Text style={styles.infoText}>{formInfo}</Text> : null}
+                {/* Uzun suren adim: kullanici hangi asamada olundugunu ve
+                    isin ilerledigini gorebilmeli. */}
+                {isSubmitting && ingestProgress ? (
+                    <View style={styles.progressCard}>
+                        <View style={styles.progressHead}>
+                            <ActivityIndicator size="small" color={palette.accent} />
+                            <Text style={styles.progressLabel} numberOfLines={2}>
+                                {ingestProgress.label}
+                            </Text>
+                        </View>
+
+                        <View
+                            style={styles.progressTrack}
+                            accessibilityRole="progressbar"
+                            accessibilityValue={
+                                progressRatio === null
+                                    ? undefined
+                                    : {
+                                          min: 0,
+                                          max: ingestProgress.total,
+                                          now: ingestProgress.completed,
+                                      }
+                            }
+                        >
+                            <View
+                                style={[
+                                    styles.progressFill,
+                                    // Toplam bilinmiyorken belirsizlik yerine ince
+                                    // bir baslangic dolgusu gosteriliyor.
+                                    { width: `${(progressRatio ?? 0.08) * 100}%` },
+                                ]}
+                            />
+                        </View>
+
+                        <Text style={styles.progressHint}>
+                            Bu adım dosyanın boyutuna göre birkaç dakika sürebilir.
+                            Uygulamayı açık tut.
+                        </Text>
+                    </View>
+                ) : null}
+
                 {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
                 <Pressable
@@ -425,6 +611,9 @@ export default function AddSourceScreen() {
                         void handleCreateSource();
                     }}
                     disabled={isBusy}
+                    accessibilityRole="button"
+                    accessibilityLabel="Analiz et ve soru üret"
+                    accessibilityState={{ disabled: isBusy, busy: isSubmitting }}
                 >
                     {isSubmitting ? (
                         <ActivityIndicator size="small" color={palette.onDarkPrimary} />
@@ -436,9 +625,14 @@ export default function AddSourceScreen() {
 
                 <Pressable
                     onPress={closeSheet}
+                    disabled={isSubmitting}
+                    accessibilityRole="button"
+                    accessibilityLabel="Vazgeç ve kapat"
+                    accessibilityState={{ disabled: isSubmitting }}
                     style={({ pressed }) => [
                         styles.cancelButton,
                         pressed ? styles.pressed : null,
+                        isSubmitting ? styles.disabled : null,
                     ]}
                 >
                     <Text style={styles.cancelButtonText}>İptal</Text>
@@ -557,8 +751,10 @@ const styles = StyleSheet.create({
         marginTop: spacing.xs,
     },
     suggestionChip: {
-        paddingVertical: 6,
-        paddingHorizontal: 11,
+        justifyContent: 'center',
+        minHeight: 36,
+        paddingVertical: 8,
+        paddingHorizontal: 13,
         borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: palette.cardBorder,
@@ -577,6 +773,41 @@ const styles = StyleSheet.create({
         color: palette.accent,
         fontWeight: '700',
     },
+    progressCard: {
+        gap: spacing.sm,
+        marginTop: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.primarySurface,
+    },
+    progressHead: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    progressLabel: {
+        flex: 1,
+        fontSize: 13,
+        fontWeight: '700',
+        color: palette.textPrimary,
+    },
+    progressTrack: {
+        height: 6,
+        borderRadius: radius.pill,
+        backgroundColor: palette.teal100,
+        overflow: 'hidden',
+    },
+    progressFill: {
+        height: '100%',
+        borderRadius: radius.pill,
+        backgroundColor: palette.accent,
+    },
+    progressHint: {
+        ...uiType.small,
+        color: palette.textSecondary,
+    },
     submitButton: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -592,6 +823,21 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
     },
+    secondaryButton: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: spacing.sm,
+        paddingVertical: 14,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.primarySurface,
+    },
+    secondaryButtonText: {
+        color: palette.primary,
+        fontSize: 15,
+        fontWeight: '700',
+    },
     cancelButton: {
         alignItems: 'center',
         justifyContent: 'center',
@@ -602,17 +848,25 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '600',
     },
+    doneIcon: {
+        alignSelf: 'center',
+        width: 64,
+        height: 64,
+        borderRadius: radius.pill,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: palette.successSurface,
+        marginBottom: spacing.sm,
+    },
+    doneBody: {
+        ...uiType.body,
+        color: palette.textSecondary,
+    },
     pressed: {
         opacity: 0.75,
     },
     disabled: {
         opacity: 0.55,
-    },
-    infoText: {
-        color: palette.success,
-        fontSize: 13,
-        lineHeight: 19,
-        marginTop: spacing.sm,
     },
     errorText: {
         color: palette.danger,

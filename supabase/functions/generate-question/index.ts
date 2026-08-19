@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std/http/server.ts';
+import { handlePreflight, jsonHeaders } from '../_shared/cors.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.6-flash';
@@ -50,6 +51,11 @@ async function callGeminiWithRetry(payload: unknown): Promise<{ response: Respon
 }
 
 serve(async (req) => {
+    const preflight = handlePreflight(req);
+    if (preflight) {
+        return preflight;
+    }
+
     try {
         const { sourceContent, topicName, difficulty = 3 } = await req.json();
 
@@ -66,7 +72,7 @@ serve(async (req) => {
         if ('error' in geminiResult) {
             return new Response(JSON.stringify({ error: geminiResult.error }), {
                 status: 503,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -76,19 +82,19 @@ serve(async (req) => {
         if (!rawText) {
             return new Response(
                 JSON.stringify({ error: 'Gemini yaniti bos veya beklenen formatta degil.' }),
-                { status: 500, headers: { 'Content-Type': 'application/json' } }
+                { status: 500, headers: jsonHeaders }
             );
         }
 
         const cleanJson = rawText.replace(/```json|```/g, '').trim();
 
         return new Response(cleanJson, {
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders,
         });
     } catch (error) {
         return new Response(
             JSON.stringify({ error: error instanceof Error ? error.message : 'Bilinmeyen hata' }),
-            { status: 500, headers: { 'Content-Type': 'application/json' } }
+            { status: 500, headers: jsonHeaders }
         );
     }
 });

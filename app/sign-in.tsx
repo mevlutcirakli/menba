@@ -14,51 +14,59 @@ import {
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { buildAuthRedirectUrl } from '../src/hooks/useAuthDeepLink';
 import { supabase } from '../src/services/supabase';
 import { palette, radius, spacing, uiType } from '../src/theme/tokens';
+import { localizeError } from '../src/utils/errors';
+
+type AuthMode = 'sign-in' | 'sign-up';
+
+const MIN_PASSWORD_LENGTH = 6;
 
 /**
- * Supabase auth hatalari Ingilizce donuyor; kullaniciya ham mesaj yerine
- * Turkce karsiligi gosteriliyor. Eslesmeyen bir durumda genel bir metne
- * dusuluyor, boylece ekranda hicbir zaman Ingilizce cikmiyor.
+ * Kayit istegi aslinda "bu e-posta zaten kayitli" anlamina mi geliyor?
+ *
+ * Supabase, e-posta sayimini (enumeration) zorlastirmak icin var olan bir
+ * adrese yapilan signUp cagrisina HATA DONDURMUYOR: oturumsuz, sahte bir
+ * kullanici nesnesi donuyor. Bu yuzden kod "hesabin olusturuldu, dogrulama
+ * maili gonderildi" diyordu; oysa hicbir mail gitmiyordu.
+ *
+ * Ayirt edici isaret `identities` dizisinin bos olmasi: gercekten yeni
+ * olusturulan kullanicida en az bir kimlik kaydi bulunur.
+ *
+ * Not: Bu ayrimi gostermek, adresin kayitli olup olmadigini ele veriyor.
+ * Bilincli bir tercih; kullanicinin neden mail almadigini anlamamasi daha
+ * buyuk bir sorundu. Panelde "Prevent enumeration" acik kalabilir, bu kontrol
+ * ondan bagimsiz calisir.
  */
-function localizeAuthError(message: string): string {
-    const normalized = message.toLowerCase();
-
-    if (normalized.includes('invalid login credentials')) {
-        return 'E-posta veya şifre hatalı. Lütfen tekrar dene.';
-    }
-    if (normalized.includes('email not confirmed')) {
-        return 'E-posta adresin henüz doğrulanmamış. Gelen kutunu kontrol et.';
-    }
-    if (normalized.includes('user already registered')) {
-        return 'Bu e-posta ile zaten bir hesap var. Giriş yapmayı dene.';
-    }
-    if (normalized.includes('password should be at least')) {
-        return 'Şifre en az 6 karakter olmalı.';
-    }
-    if (normalized.includes('unable to validate email address') || normalized.includes('invalid email')) {
-        return 'Geçerli bir e-posta adresi gir.';
-    }
-    if (normalized.includes('email rate limit') || normalized.includes('for security purposes')) {
-        return 'Çok fazla deneme yapıldı. Biraz bekleyip tekrar dene.';
-    }
-    if (normalized.includes('network') || normalized.includes('fetch')) {
-        return 'Bağlantı kurulamadı. İnternetini kontrol edip tekrar dene.';
-    }
-
-    return 'Bir sorun oluştu. Lütfen tekrar dene.';
+function isAlreadyRegisteredResponse(user: { identities?: unknown[] | null } | null): boolean {
+    return Boolean(user && Array.isArray(user.identities) && user.identities.length === 0);
 }
 
 // Oturum acildiginda buradan cikisi _layout.tsx'teki Stack.Protected yapar;
 // bu ekranda ayrica Redirect kullanmak cift yonlendirmeye yol acar.
 export default function SignInScreen() {
     const insets = useSafeAreaInsets();
+    const [mode, setMode] = useState<AuthMode>('sign-in');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [isPasswordVisible, setIsPasswordVisible] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [info, setInfo] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const isSignUp = mode === 'sign-up';
+
+    const switchMode = (next: AuthMode) => {
+        if (next === mode) {
+            return;
+        }
+
+        void Haptics.selectionAsync();
+        setMode(next);
+        setError(null);
+        setInfo(null);
+    };
 
     /** Sunucuya gitmeden once bos alanlari yakala. */
     const validate = (): boolean => {
@@ -68,6 +76,10 @@ export default function SignInScreen() {
         }
         if (!password) {
             setError('Şifreni gir.');
+            return false;
+        }
+        if (isSignUp && password.length < MIN_PASSWORD_LENGTH) {
+            setError(`Şifre en az ${MIN_PASSWORD_LENGTH} karakter olmalı.`);
             return false;
         }
         return true;
@@ -90,7 +102,7 @@ export default function SignInScreen() {
         });
 
         if (signInError) {
-            setError(localizeAuthError(signInError.message));
+            setError(localizeError(signInError, 'Giriş yapılamadı.'));
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         }
 
@@ -111,19 +123,82 @@ export default function SignInScreen() {
         const { data, error: signUpError } = await supabase.auth.signUp({
             email: email.trim(),
             password,
+            options: {
+                // Dogrulama baglantisi tarayicida degil uygulamada acilsin;
+                // gelen token'i src/hooks/useAuthDeepLink karsiliyor.
+                // Uretilen adres: menba://
+                emailRedirectTo: buildAuthRedirectUrl(),
+            },
         });
 
-        if (signUpError) {
-            setError(localizeAuthError(signUpError.message));
+        // "Zaten kayitli" iki farkli sekilde gelebiliyor: panelde enumeration
+        // korumasi kapaliysa acik bir hata, acikken sessiz bir sahte yanit.
+        const isAlreadyRegistered =
+            signUpError?.message.toLowerCase().includes('already registered') ||
+            (!signUpError && isAlreadyRegisteredResponse(data.user));
+
+        if (isAlreadyRegistered) {
+            // Kullaniciyi giris sekmesine tasi: aradigi sey muhtemelen giris
+            // ya da sifre sifirlama, ikisi de o sekmede.
+            setMode('sign-in');
+            setError(
+                'Bu e-posta ile zaten bir hesap var. Giriş yapabilir, şifreni ' +
+                    'hatırlamıyorsan aşağıdan sıfırlayabilirsin.'
+            );
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        } else if (signUpError) {
+            setError(localizeError(signUpError, 'Hesap oluşturulamadı.'));
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         } else if (!data.session) {
             // E-posta dogrulamasi acikken signUp oturum acmaz; ekranda hicbir
             // sey degismezse kullanici kaydin basarisiz oldugunu saniyor.
-            setInfo('Hesabın oluşturuldu. E-postana gönderilen doğrulama bağlantısına tıkla.');
+            setInfo(
+                'Hesabın oluşturuldu. E-postana gönderilen doğrulama bağlantısına dokun; ' +
+                    'bağlantı seni doğrudan uygulamaya geri getirecek.'
+            );
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
 
         setIsSubmitting(false);
+    };
+
+    const sendPasswordReset = async () => {
+        setError(null);
+        setInfo(null);
+
+        if (!email.trim()) {
+            setError('Sıfırlama bağlantısı için önce e-posta adresini gir.');
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            return;
+        }
+
+        setIsSubmitting(true);
+
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+            email.trim(),
+            // Uretilen adres: menba://reset-password
+            { redirectTo: buildAuthRedirectUrl('reset-password') }
+        );
+
+        if (resetError) {
+            setError(localizeError(resetError, 'Sıfırlama bağlantısı gönderilemedi.'));
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        } else {
+            // Hesabin var olup olmadigini sizdirmamak icin her durumda ayni
+            // mesaj veriliyor; Supabase de bu yuzden hata dondurmuyor.
+            setInfo(
+                `${email.trim()} adresine bir sıfırlama bağlantısı gönderdik. ` +
+                    'Gelen kutunu (ve spam klasörünü) kontrol et.'
+            );
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+
+        setIsSubmitting(false);
+    };
+
+    const submit = () => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        void (isSignUp ? signUp() : signIn());
     };
 
     return (
@@ -153,9 +228,53 @@ export default function SignInScreen() {
 
                     <Text style={styles.title}>Menba'ya hoş geldin</Text>
                     <Text style={styles.description}>
-                        Kendi kaynaklarından soru bankası oluşturmak için giriş yap ya da
-                        yeni bir hesap aç.
+                        Kendi kaynaklarından soru bankası oluştur. Hesabın varsa giriş yap,
+                        yoksa birkaç saniyede aç.
                     </Text>
+
+                    {/* Iki mod ayri sekmeye ayrildi: onceden ayni form iki
+                        butonla calisiyordu ve yeni kullanici hangisine
+                        basacagini ancak en alttaki dipnottan anliyordu. */}
+                    <View style={styles.segment} accessibilityRole="tablist">
+                        <Pressable
+                            onPress={() => switchMode('sign-in')}
+                            accessibilityRole="tab"
+                            accessibilityLabel="Giriş yap sekmesi"
+                            accessibilityState={{ selected: !isSignUp }}
+                            style={[
+                                styles.segmentItem,
+                                !isSignUp ? styles.segmentItemActive : null,
+                            ]}
+                        >
+                            <Text
+                                style={[
+                                    styles.segmentText,
+                                    !isSignUp ? styles.segmentTextActive : null,
+                                ]}
+                            >
+                                Giriş Yap
+                            </Text>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => switchMode('sign-up')}
+                            accessibilityRole="tab"
+                            accessibilityLabel="Hesap oluştur sekmesi"
+                            accessibilityState={{ selected: isSignUp }}
+                            style={[
+                                styles.segmentItem,
+                                isSignUp ? styles.segmentItemActive : null,
+                            ]}
+                        >
+                            <Text
+                                style={[
+                                    styles.segmentText,
+                                    isSignUp ? styles.segmentTextActive : null,
+                                ]}
+                            >
+                                Hesap Oluştur
+                            </Text>
+                        </Pressable>
+                    </View>
 
                     <View style={styles.form}>
                         <Text style={styles.fieldLabel}>E-posta</Text>
@@ -171,24 +290,49 @@ export default function SignInScreen() {
                             keyboardType="email-address"
                             returnKeyType="next"
                             editable={!isSubmitting}
+                            accessibilityLabel="E-posta adresi"
                             style={styles.input}
                         />
 
                         <Text style={styles.fieldLabel}>Şifre</Text>
-                        <TextInput
-                            value={password}
-                            onChangeText={setPassword}
-                            placeholder="En az 6 karakter"
-                            placeholderTextColor={palette.textMuted}
-                            secureTextEntry
-                            autoCapitalize="none"
-                            autoComplete="password"
-                            textContentType="password"
-                            returnKeyType="done"
-                            editable={!isSubmitting}
-                            onSubmitEditing={() => void signIn()}
-                            style={styles.input}
-                        />
+                        <View style={styles.inputRow}>
+                            <TextInput
+                                value={password}
+                                onChangeText={setPassword}
+                                placeholder={`En az ${MIN_PASSWORD_LENGTH} karakter`}
+                                placeholderTextColor={palette.textMuted}
+                                secureTextEntry={!isPasswordVisible}
+                                autoCapitalize="none"
+                                autoComplete={isSignUp ? 'new-password' : 'password'}
+                                textContentType={isSignUp ? 'newPassword' : 'password'}
+                                returnKeyType="done"
+                                editable={!isSubmitting}
+                                onSubmitEditing={submit}
+                                accessibilityLabel="Şifre"
+                                style={styles.inputFlex}
+                            />
+                            <Pressable
+                                onPress={() =>
+                                    setIsPasswordVisible((previous) => !previous)
+                                }
+                                hitSlop={12}
+                                accessibilityRole="button"
+                                accessibilityLabel={
+                                    isPasswordVisible ? 'Şifreyi gizle' : 'Şifreyi göster'
+                                }
+                                style={styles.visibilityToggle}
+                            >
+                                <Ionicons
+                                    name={
+                                        isPasswordVisible
+                                            ? 'eye-off-outline'
+                                            : 'eye-outline'
+                                    }
+                                    size={19}
+                                    color={palette.textMuted}
+                                />
+                            </Pressable>
+                        </View>
                     </View>
 
                     {info ? (
@@ -215,38 +359,44 @@ export default function SignInScreen() {
                             pressed ? styles.pressed : null,
                             isSubmitting ? styles.disabled : null,
                         ]}
-                        onPress={() => {
-                            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                            void signIn();
-                        }}
+                        onPress={submit}
                         disabled={isSubmitting}
+                        accessibilityRole="button"
+                        accessibilityLabel={isSignUp ? 'Hesap oluştur' : 'Giriş yap'}
+                        accessibilityState={{ disabled: isSubmitting, busy: isSubmitting }}
                     >
                         {isSubmitting ? (
                             <ActivityIndicator size="small" color={palette.onDarkPrimary} />
                         ) : null}
                         <Text style={styles.primaryButtonText}>
-                            {isSubmitting ? 'İşleniyor...' : 'Giriş Yap'}
+                            {isSubmitting
+                                ? 'İşleniyor...'
+                                : isSignUp
+                                  ? 'Hesap Oluştur'
+                                  : 'Giriş Yap'}
                         </Text>
                     </Pressable>
 
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.secondaryButton,
-                            pressed ? styles.pressed : null,
-                            isSubmitting ? styles.disabled : null,
-                        ]}
-                        onPress={() => {
-                            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            void signUp();
-                        }}
-                        disabled={isSubmitting}
-                    >
-                        <Text style={styles.secondaryButtonText}>Hesap Oluştur</Text>
-                    </Pressable>
-
-                    <Text style={styles.footnote}>
-                        Hesabın yoksa aynı bilgilerle "Hesap Oluştur"a dokunman yeterli.
-                    </Text>
+                    {!isSignUp ? (
+                        <Pressable
+                            onPress={() => void sendPasswordReset()}
+                            disabled={isSubmitting}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel="Şifremi unuttum, sıfırlama bağlantısı gönder"
+                            style={({ pressed }) => [
+                                styles.linkButton,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Text style={styles.linkButtonText}>Şifremi unuttum</Text>
+                        </Pressable>
+                    ) : (
+                        <Text style={styles.footnote}>
+                            Kaydolduktan sonra e-postana bir doğrulama bağlantısı
+                            göndereceğiz.
+                        </Text>
+                    )}
                 </ScrollView>
             </KeyboardAvoidingView>
         </View>
@@ -285,6 +435,31 @@ const styles = StyleSheet.create({
         color: palette.textSecondary,
         marginBottom: spacing.md,
     },
+    segment: {
+        flexDirection: 'row',
+        gap: spacing.xs,
+        padding: 4,
+        borderRadius: radius.md,
+        backgroundColor: palette.subtleBg,
+    },
+    segmentItem: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 11,
+        borderRadius: radius.sm,
+    },
+    segmentItemActive: {
+        backgroundColor: palette.cardBg,
+    },
+    segmentText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: palette.textMuted,
+    },
+    segmentTextActive: {
+        color: palette.primary,
+    },
     form: {
         gap: spacing.xs,
     },
@@ -303,6 +478,28 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: palette.textPrimary,
         backgroundColor: palette.cardBg,
+    },
+    inputRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: palette.cardBorder,
+        borderRadius: radius.md,
+        paddingRight: spacing.sm,
+        backgroundColor: palette.cardBg,
+    },
+    inputFlex: {
+        flex: 1,
+        paddingHorizontal: spacing.md,
+        paddingVertical: 13,
+        fontSize: 14,
+        color: palette.textPrimary,
+    },
+    visibilityToggle: {
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     statusRow: {
         flexDirection: 'row',
@@ -342,19 +539,15 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
     },
-    secondaryButton: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: spacing.sm,
-        paddingVertical: 14,
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: palette.primaryBorder,
-        backgroundColor: palette.primarySurface,
+    linkButton: {
+        alignSelf: 'center',
+        marginTop: spacing.md,
+        paddingVertical: spacing.sm,
+        paddingHorizontal: spacing.md,
     },
-    secondaryButtonText: {
-        color: palette.primary,
-        fontSize: 15,
+    linkButtonText: {
+        color: palette.accent,
+        fontSize: 14,
         fontWeight: '700',
     },
     footnote: {

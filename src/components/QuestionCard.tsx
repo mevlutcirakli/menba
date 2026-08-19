@@ -157,6 +157,20 @@ function OptionRow({
             <Pressable
                 onPress={() => onSelect(option)}
                 disabled={disabled}
+                accessibilityRole="radio"
+                accessibilityLabel={`${letter} şıkkı: ${text}`}
+                // Dogru/yanlis bilgisi yalnizca renkle verilmesin.
+                accessibilityHint={
+                    state === 'correct'
+                        ? 'Doğru cevap'
+                        : state === 'wrong'
+                          ? 'İşaretlediğin şık, yanlış'
+                          : undefined
+                }
+                accessibilityState={{
+                    disabled,
+                    checked: state === 'correct' || state === 'wrong',
+                }}
                 onPressIn={() => {
                     if (disabled) {
                         return;
@@ -255,7 +269,10 @@ export function QuestionCard({
 
                     return (
                         <OptionRow
-                            key={option}
+                            // Sik METNI anahtar olarak kullanilamaz: modelden
+                            // ayni metinli iki sik gelebiliyor ve React o
+                            // durumda satirlari karistiriyor.
+                            key={`${index}-${letter}`}
                             option={option}
                             letter={letter}
                             text={text}

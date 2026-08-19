@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useState } from 'react';
 import {
     Alert,
     Pressable,
+    RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
@@ -15,12 +17,30 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { useDashboardStats } from '../../src/hooks/useDashboardStats';
 import { supabase } from '../../src/services/supabase';
 import { palette, radius, spacing, uiType } from '../../src/theme/tokens';
+import { localizeError } from '../../src/utils/errors';
 
 export default function ProfileScreen() {
     const insets = useSafeAreaInsets();
     const { session } = useAuth();
-    const { sourceCount, answeredCount, overallAccuracy, streakDays } = useDashboardStats();
+    const {
+        sourceCount,
+        answeredCount,
+        overallAccuracy,
+        streakDays,
+        isLoading,
+        error,
+        refresh,
+    } = useDashboardStats();
     const [signOutError, setSignOutError] = useState<string | null>(null);
+
+    // Sekmeye her donuste istatistikler tazelensin. Onceden yalnizca mount
+    // aninda yukleniyorlardi: test cozup ya da kaynak silip profile gecen
+    // kullanici eski sayilari goruyordu.
+    useFocusEffect(
+        useCallback(() => {
+            void refresh();
+        }, [refresh])
+    );
 
     const email = session?.user?.email ?? '';
     const metadata = session?.user?.user_metadata as Record<string, unknown> | undefined;
@@ -38,9 +58,11 @@ export default function ProfileScreen() {
                 onPress: () => {
                     void (async () => {
                         setSignOutError(null);
-                        const { error } = await supabase.auth.signOut();
-                        if (error) {
-                            setSignOutError(error.message);
+                        const { error: signOutFailure } = await supabase.auth.signOut();
+                        if (signOutFailure) {
+                            setSignOutError(
+                                localizeError(signOutFailure, 'Çıkış yapılamadı.')
+                            );
                         }
                     })();
                 },
@@ -58,6 +80,15 @@ export default function ProfileScreen() {
                     { paddingTop: insets.top + spacing.md },
                 ]}
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isLoading}
+                        onRefresh={() => void refresh()}
+                        tintColor={palette.accent}
+                        colors={[palette.accent]}
+                        progressViewOffset={insets.top}
+                    />
+                }
             >
                 <Text style={styles.pageTitle}>Profil</Text>
 
@@ -76,6 +107,31 @@ export default function ProfileScreen() {
                 </View>
 
                 <Text style={styles.sectionTitle}>Özet</Text>
+
+                {error ? (
+                    <View style={styles.errorCard}>
+                        <View style={styles.errorHead}>
+                            <Ionicons
+                                name="cloud-offline-outline"
+                                size={17}
+                                color={palette.danger}
+                            />
+                            <Text style={styles.errorText}>{error}</Text>
+                        </View>
+                        <Pressable
+                            onPress={() => void refresh()}
+                            accessibilityRole="button"
+                            accessibilityLabel="Tekrar dene"
+                            style={({ pressed }) => [
+                                styles.retryButton,
+                                pressed ? styles.pressed : null,
+                            ]}
+                        >
+                            <Ionicons name="refresh" size={14} color={palette.accent} />
+                            <Text style={styles.retryText}>Tekrar dene</Text>
+                        </Pressable>
+                    </View>
+                ) : null}
 
                 <View style={styles.statRow}>
                     <StatTile
@@ -107,6 +163,8 @@ export default function ProfileScreen() {
 
                 <Pressable
                     onPress={handleSignOut}
+                    accessibilityRole="button"
+                    accessibilityLabel="Oturumu kapat"
                     style={({ pressed }) => [
                         styles.signOutButton,
                         pressed ? styles.pressed : null,
@@ -201,9 +259,40 @@ const styles = StyleSheet.create({
     pressed: {
         opacity: 0.7,
     },
+    errorCard: {
+        gap: spacing.sm,
+        padding: spacing.md,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.dangerBorder,
+        backgroundColor: palette.dangerSurface,
+    },
+    errorHead: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+    },
+    retryButton: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        minHeight: 36,
+        paddingHorizontal: 12,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.cardBg,
+    },
+    retryText: {
+        ...uiType.small,
+        fontWeight: '700',
+        color: palette.accent,
+    },
     errorText: {
+        flex: 1,
         color: palette.danger,
         fontSize: 13,
-        marginTop: spacing.sm,
+        lineHeight: 19,
     },
 });

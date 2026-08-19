@@ -4,6 +4,7 @@ import { generateQuestion } from '../services/geminiService';
 import { supabase } from '../services/supabase';
 import type { Database } from '../types/database.types';
 import type { GeneratedQuestion } from '../types/quiz.types';
+import { localizeError } from '../utils/errors';
 
 type Source = Database['public']['Tables']['sources']['Row'];
 type Topic = Database['public']['Tables']['topics']['Row'];
@@ -150,6 +151,12 @@ export function useQuiz(sourceId?: string) {
     const [error, setError] = useState<string | null>(null);
     const prefetchedQuestionsRef = useRef<Map<string, PreparedQuestion[]>>(new Map());
     const prefetchInFlightRef = useRef<Set<string>>(new Set());
+    // Uretim/banka cekimi surerken gelen ikinci cagriyi engeller. `isGenerating`
+    // state'i tek basina yetmiyor: iki dokunus ayni render'da islenirse ikisi de
+    // eski (false) degeri gorup ayni anda soru tuketiyordu.
+    const generationInFlightRef = useRef(false);
+    /** Ayni soruya cift dokunusun iki log satiri yazmasini engeller. */
+    const submitInFlightRef = useRef(false);
     const askedQuestionIdsRef = useRef<Set<string>>(new Set());
     // "Tum Konular" modunda siradaki konuyu secebilmek icin konu basina
     // bankadaki soru sayisi ve bu oturumda kacinin cozuldugu tutuluyor.
@@ -208,7 +215,7 @@ export function useQuiz(sourceId?: string) {
 
     const refresh = useCallback(async () => {
         if (!sourceId) {
-            setError('Gecerli bir kaynak secilmedi.');
+            setError('Geçerli bir kaynak seçilmedi.');
             setIsLoading(false);
             return;
         }
@@ -223,19 +230,19 @@ export function useQuiz(sourceId?: string) {
             ]);
 
         if (sourceError) {
-            setError(sourceError.message);
+            setError(localizeError(sourceError, 'Kaynak açılamadı.'));
             setIsLoading(false);
             return;
         }
 
         if (!sourceData) {
-            setError('Kaynak bulunamadi veya bu kaynaga erisim izniniz yok.');
+            setError('Kaynak bulunamadı veya bu kaynağa erişim izniniz yok.');
             setIsLoading(false);
             return;
         }
 
         if (topicError) {
-            setError(topicError.message);
+            setError(localizeError(topicError, 'Konular yüklenemedi.'));
             setIsLoading(false);
             return;
         }
@@ -390,7 +397,13 @@ export function useQuiz(sourceId?: string) {
                 return null;
             }
 
-            const picked = unseen[Math.floor(Math.random() * unseen.length)] ?? null;
+            // Kullanicinin kendi kaynagindan cikan sorular her zaman once
+            // sorulur; daha once uretilmis AI sorulari ancak onlar bitince
+            // devreye girer.
+            const fromSource = unseen.filter((row) => row.origin !== 'ai');
+            const pool = fromSource.length > 0 ? fromSource : unseen;
+
+            const picked = pool[Math.floor(Math.random() * pool.length)] ?? null;
             if (!picked) {
                 return null;
             }
@@ -488,12 +501,12 @@ export function useQuiz(sourceId?: string) {
     const ensureTopic = useCallback(
         async (topicName: string): Promise<Topic> => {
             if (!sourceId) {
-                throw new Error('Kaynak secimi gecersiz.');
+                throw new Error('Kaynak seçimi geçersiz.');
             }
 
             const trimmedName = topicName.trim();
             if (!trimmedName) {
-                throw new Error('Konu adi bos olamaz.');
+                throw new Error('Konu adı boş olamaz.');
             }
 
             const existingTopic = topics.find(
@@ -517,7 +530,7 @@ export function useQuiz(sourceId?: string) {
                 .single();
 
             if (insertError || !data) {
-                throw new Error(insertError?.message ?? 'Konu olusturulamadi.');
+                throw new Error(localizeError(insertError, 'Konu oluşturulamadı.'));
             }
 
             setTopics((prev) => [...prev, data]);
@@ -529,9 +542,22 @@ export function useQuiz(sourceId?: string) {
     const generateForTopic = useCallback(
         async ({ topicId, topicName, difficulty = 3 }: GenerateForTopicOptions) => {
             if (!source) {
-                throw new Error('Kaynak yuklenemedi.');
+                throw new Error('Kaynak henüz yüklenmedi. Lütfen biraz bekleyip tekrar dene.');
             }
 
+            // Zaten bir soru hazirlaniyorsa ikinci cagriyi yok say. Aksi halde
+            // "Sonraki Soru"ya iki kez dokunmak iki soru tuketip birini hic
+            // gostermiyordu.
+            if (generationInFlightRef.current) {
+                return;
+            }
+
+            generationInFlightRef.current = true;
+            // Bayrak BANKA yolunda da kaldiriliyor. Onceden yalnizca AI
+            // uretiminde set ediliyordu; bankadan soru cekilirken ekran
+            // "soru yok" sanip "Akisi Tekrar Baslat" butonunu gosteriyor,
+            // "Sonraki Soru" butonu da hicbir ilerleme isareti vermiyordu.
+            setIsGenerating(true);
             setError(null);
             setGenerationStatus('Konu hazirlaniyor...');
 
@@ -547,7 +573,7 @@ export function useQuiz(sourceId?: string) {
                 }
 
                 if (!selectedTopic) {
-                    throw new Error('Lutfen bir konu secin veya konu adi girin.');
+                    throw new Error('Lütfen bir konu seçin veya konu adı girin.');
                 }
 
                 const queueKey = getQueueKey(selectedTopic.id, difficulty);
@@ -592,7 +618,6 @@ export function useQuiz(sourceId?: string) {
 
                 // Buraya ancak konudaki hazir sorularin tamami cozuldukten
                 // sonra gelinir.
-                setIsGenerating(true);
                 setGenerationStatus('Konudaki sorular bitti. AI yeni soru uretiyor...');
 
                 const generated = await requestQuestionForTopic(selectedTopic, difficulty);
@@ -608,14 +633,11 @@ export function useQuiz(sourceId?: string) {
 
                 void prefetchNextQuestion(selectedTopic, difficulty);
             } catch (generationError) {
-                setError(
-                    generationError instanceof Error
-                        ? generationError.message
-                        : 'Soru uretimi sirasinda hata olustu.'
-                );
+                setError(localizeError(generationError, 'Soru hazırlanamadı.'));
                 setGenerationStatus('Soru uretimi basarisiz oldu. Tekrar deneyebilirsin.');
                 throw generationError;
             } finally {
+                generationInFlightRef.current = false;
                 setIsGenerating(false);
             }
         },
@@ -631,10 +653,21 @@ export function useQuiz(sourceId?: string) {
     );
 
     const submitAnswer = useCallback(
-        async (selectedOption: string) => {
+        /**
+         * Cevap gercekten kaydedildiyse true doner. Ayni soruya cift dokunusta
+         * ikinci cagri false doner; cagiran taraf sayaclarini bu degere gore
+         * artirmali, aksi halde tek cevap iki kez sayiliyor.
+         */
+        async (selectedOption: string): Promise<boolean> => {
             if (!currentQuestion || !activeTopic) {
                 throw new Error('Cevaplanacak aktif soru yok.');
             }
+
+            if (submitInFlightRef.current) {
+                return false;
+            }
+
+            submitInFlightRef.current = true;
 
             setIsSubmittingAnswer(true);
             setError(null);
@@ -646,7 +679,7 @@ export function useQuiz(sourceId?: string) {
                 } = await supabase.auth.getUser();
 
                 if (userError || !user) {
-                    throw new Error(userError?.message ?? 'Kullanici oturumu bulunamadi.');
+                    throw new Error(localizeError(userError, 'Oturum bulunamadı.'));
                 }
 
                 const correctChoice = normalizeChoice(currentQuestion.dogruCevap);
@@ -664,12 +697,18 @@ export function useQuiz(sourceId?: string) {
                             options: currentQuestion.secenekler,
                             correct_answer: correctChoice,
                             explanation: currentQuestion.aciklama,
+                            // Kaydi olmayan tek soru turu AI uretimi. Isaret
+                            // konmazsa konu kartindaki "X soru" sayaci test
+                            // cozuldukce sisiyor (bkz. migration 0007).
+                            origin: 'ai',
                         })
                         .select('id')
                         .single();
 
                     if (questionError || !insertedQuestion) {
-                        throw new Error(questionError?.message ?? 'Soru kaydi olusturulamadi.');
+                        throw new Error(
+                            localizeError(questionError, 'Soru kaydı oluşturulamadı.')
+                        );
                     }
 
                     questionIdForLog = insertedQuestion.id;
@@ -700,10 +739,12 @@ export function useQuiz(sourceId?: string) {
                 });
 
                 void prefetchNextQuestion(activeTopic, activeDifficulty);
+                return true;
             } catch (submitError) {
-                setError(submitError instanceof Error ? submitError.message : 'Cevap kaydedilemedi.');
+                setError(localizeError(submitError, 'Cevabın kaydedilemedi.'));
                 throw submitError;
             } finally {
+                submitInFlightRef.current = false;
                 setIsSubmittingAnswer(false);
             }
         },

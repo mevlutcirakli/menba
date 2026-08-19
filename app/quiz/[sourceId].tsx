@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
     ActivityIndicator,
     Alert,
@@ -21,18 +21,25 @@ import { SkeletonCard } from '../../src/components/SkeletonCard';
 import { useQuiz } from '../../src/hooks/useQuiz';
 import { supabase } from '../../src/services/supabase';
 import { palette, radius, spacing, uiType } from '../../src/theme/tokens';
-
-interface QuizUiSessionState {
-    selectedTopicId: string | null;
-    newTopicName: string;
-}
+import { localizeError } from '../../src/utils/errors';
 
 interface TopicCounts {
+    /** Kaynak metninden cikarilan soru sayisi. */
+    sourceQuestionCount: number;
+    /** Daha once AI'in uretip bankaya eklendigi soru sayisi. */
+    aiQuestionCount: number;
+    /** Ikisinin toplami. */
     questionCount: number;
+    /** En az bir kez cevaplanmis benzersiz soru sayisi. */
     solvedCount: number;
 }
 
-const quizUiStateBySource = new Map<string, QuizUiSessionState>();
+const EMPTY_COUNTS: TopicCounts = {
+    sourceQuestionCount: 0,
+    aiQuestionCount: 0,
+    questionCount: 0,
+    solvedCount: 0,
+};
 
 export default function QuizBySourceScreen() {
     const router = useRouter();
@@ -56,30 +63,26 @@ export default function QuizBySourceScreen() {
         return { totalQuestionCount: total, totalSolvedCount: solved };
     }, [countsByTopicId]);
 
-    useEffect(() => {
-        if (!sourceId) {
-            return;
-        }
+    /**
+     * Testin uzunlugu = konuda HENUZ COZULMEMIS soru sayisi.
+     * Onceden toplam soru sayisi gonderiliyordu: 40 soruluk bir konuda 10
+     * soru cozup cikan kullanici geri dondugunde yine "1 / 40" goruyordu.
+     */
+    const remainingCountFor = useCallback(
+        (topicId: string): number => {
+            const counts = countsByTopicId[topicId];
+            if (!counts) {
+                return 0;
+            }
 
-        const cached = quizUiStateBySource.get(sourceId);
-        if (!cached) {
-            setSelectedTopicId(null);
-            setNewTopicName('');
-            return;
-        }
+            return Math.max(0, counts.questionCount - counts.solvedCount);
+        },
+        [countsByTopicId]
+    );
 
-        setSelectedTopicId(cached.selectedTopicId);
-        setNewTopicName(cached.newTopicName);
-    }, [sourceId]);
-
-    useEffect(() => {
-        if (!sourceId) {
-            return;
-        }
-
-        quizUiStateBySource.set(sourceId, { selectedTopicId, newTopicName });
-    }, [newTopicName, selectedTopicId, sourceId]);
-
+    // Not: ekran state'i eskiden modul seviyesinde bir Map'te tutuluyordu.
+    // Hicbir zaman temizlenmedigi icin cikis yapip baska hesapla girildiginde
+    // onceki kullanicinin konu secimi ve yazdigi konu adi duruyordu.
     useEffect(() => {
         if (!recommendedTopicId) {
             return;
@@ -102,78 +105,80 @@ export default function QuizBySourceScreen() {
         setFlowNotice(null);
     }, [newTopicName, selectedTopicId]);
 
-    useEffect(() => {
+    const loadTopicCounts = useCallback(async () => {
         if (topics.length === 0) {
             setCountsByTopicId({});
             return;
         }
 
-        let cancelled = false;
+        const topicIds = topics.map((topic) => topic.id);
+        const { data: questionRows } = await supabase
+            .from('questions')
+            .select('id, topic_id, origin')
+            .in('topic_id', topicIds);
 
-        const loadTopicCounts = async () => {
-            const topicIds = topics.map((topic) => topic.id);
-            const { data: questionRows } = await supabase
-                .from('questions')
-                .select('id, topic_id')
-                .in('topic_id', topicIds);
+        const topicIdByQuestionId = new Map<string, string>();
+        const nextCounts: Record<string, TopicCounts> = {};
+        for (const topic of topics) {
+            nextCounts[topic.id] = { ...EMPTY_COUNTS };
+        }
 
-            if (cancelled) {
-                return;
+        for (const row of questionRows ?? []) {
+            topicIdByQuestionId.set(row.id, row.topic_id);
+            const bucket = nextCounts[row.topic_id];
+            if (!bucket) {
+                continue;
             }
 
-            const topicIdByQuestionId = new Map<string, string>();
-            const nextCounts: Record<string, TopicCounts> = {};
-            for (const topic of topics) {
-                nextCounts[topic.id] = { questionCount: 0, solvedCount: 0 };
+            bucket.questionCount += 1;
+            if (row.origin === 'ai') {
+                bucket.aiQuestionCount += 1;
+            } else {
+                bucket.sourceQuestionCount += 1;
             }
+        }
 
-            for (const row of questionRows ?? []) {
-                topicIdByQuestionId.set(row.id, row.topic_id);
-                const bucket = nextCounts[row.topic_id];
+        // Ayni soru birden fazla kez cevaplanmis olabilir; "cozuldu"
+        // sayisi benzersiz soru kimligi uzerinden hesaplaniyor.
+        const questionIds = Array.from(topicIdByQuestionId.keys());
+        if (questionIds.length > 0) {
+            const { data: logRows } = await supabase
+                .from('question_logs')
+                .select('question_id')
+                .in('question_id', questionIds);
+
+            const solvedQuestionIds = new Set(
+                (logRows ?? []).map((row) => row.question_id)
+            );
+
+            for (const questionId of solvedQuestionIds) {
+                const topicId = topicIdByQuestionId.get(questionId);
+                if (!topicId) {
+                    continue;
+                }
+
+                const bucket = nextCounts[topicId];
                 if (bucket) {
-                    bucket.questionCount += 1;
+                    bucket.solvedCount += 1;
                 }
             }
+        }
 
-            // Ayni soru birden fazla kez cevaplanmis olabilir; "cozuldu"
-            // sayisi benzersiz soru kimligi uzerinden hesaplaniyor.
-            const questionIds = Array.from(topicIdByQuestionId.keys());
-            if (questionIds.length > 0) {
-                const { data: logRows } = await supabase
-                    .from('question_logs')
-                    .select('question_id')
-                    .in('question_id', questionIds);
-
-                if (cancelled) {
-                    return;
-                }
-
-                const solvedQuestionIds = new Set(
-                    (logRows ?? []).map((row) => row.question_id)
-                );
-
-                for (const questionId of solvedQuestionIds) {
-                    const topicId = topicIdByQuestionId.get(questionId);
-                    if (!topicId) {
-                        continue;
-                    }
-
-                    const bucket = nextCounts[topicId];
-                    if (bucket) {
-                        bucket.solvedCount += 1;
-                    }
-                }
-            }
-
-            setCountsByTopicId(nextCounts);
-        };
-
-        void loadTopicCounts();
-
-        return () => {
-            cancelled = true;
-        };
+        setCountsByTopicId(nextCounts);
     }, [topics]);
+
+    useEffect(() => {
+        void loadTopicCounts();
+    }, [loadTopicCounts]);
+
+    // Testten donunce "cozuldu" sayilari ve ilerleme halkalari guncel olsun.
+    // Tum ekrani yenilemek yerine yalnizca sayaclar tazeleniyor; refresh()
+    // isLoading'i kaldirip ekrani iskelet gorunume dusururdu.
+    useFocusEffect(
+        useCallback(() => {
+            void loadTopicCounts();
+        }, [loadTopicCounts])
+    );
 
     // Mevcut bir konuya basinca dogrudan soru akisi acilir. Test uzunlugu
     // konudaki hazir soru sayisi kadar; banka bossa play ekrani kendi
@@ -191,9 +196,30 @@ export default function QuizBySourceScreen() {
             params: {
                 sourceId,
                 topicId,
-                count: String(countsByTopicId[topicId]?.questionCount ?? 0),
+                count: String(remainingCountFor(topicId)),
             },
         });
+    };
+
+    /**
+     * Bankasi bos ya da tamamen cozulmus konuya dokunulunca akis AI uretimine
+     * duser. Bu eskiden hicbir uyari olmadan oluyordu: kullanici kendi
+     * kaynagindan soru cozdugunu saniyordu.
+     */
+    const confirmAiOnlyStart = (topicId: string, topicName: string, isExhausted: boolean) => {
+        Alert.alert(
+            isExhausted ? 'Konudaki sorular bitti' : 'Bu konuda hazır soru yok',
+            isExhausted
+                ? `"${topicName}" konusundaki tüm kaynak sorularını çözdün. Devam edersen sorular AI tarafından üretilir.`
+                : `"${topicName}" konusuna kaynaktan soru düşmemiş. Devam edersen sorular AI tarafından üretilir.`,
+            [
+                { text: 'Vazgeç', style: 'cancel' },
+                {
+                    text: 'AI ile devam et',
+                    onPress: () => handleStartTopic(topicId),
+                },
+            ]
+        );
     };
 
     // Bu ekran disinda test baslatmaz; tek istisna yeni konu, cunku konu
@@ -227,7 +253,7 @@ export default function QuizBySourceScreen() {
                 .eq('id', topicId);
 
             if (deleteTopicError) {
-                throw new Error(deleteTopicError.message);
+                throw new Error(localizeError(deleteTopicError, 'Konu silinemedi.'));
             }
 
             if (selectedTopicId === topicId) {
@@ -236,9 +262,7 @@ export default function QuizBySourceScreen() {
 
             await refresh();
         } catch (removeError) {
-            setDeleteError(
-                removeError instanceof Error ? removeError.message : 'Konu silinemedi.'
-            );
+            setDeleteError(localizeError(removeError, 'Konu silinemedi.'));
         } finally {
             setDeletingTopicId(null);
         }
@@ -284,14 +308,38 @@ export default function QuizBySourceScreen() {
                 <View style={styles.stateWrap}>
                     <Text style={styles.errorTitle}>Konular açılamadı</Text>
                     <Text style={styles.errorText}>{error}</Text>
+
                     <Pressable
-                        onPress={() => router.push('/(tabs)/sources')}
+                        onPress={() => void refresh()}
+                        accessibilityRole="button"
+                        accessibilityLabel="Tekrar dene"
                         style={({ pressed }) => [
                             styles.primaryButton,
                             pressed ? styles.pressed : null,
                         ]}
                     >
-                        <Text style={styles.primaryButtonText}>Kaynaklara Dön</Text>
+                        <Ionicons
+                            name="refresh"
+                            size={15}
+                            color={palette.onDarkPrimary}
+                        />
+                        <Text style={styles.primaryButtonText}>Tekrar Dene</Text>
+                    </Pressable>
+
+                    <Pressable
+                        onPress={() =>
+                            router.canGoBack()
+                                ? router.back()
+                                : router.replace('/(tabs)/sources')
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel="Kaynaklara dön"
+                        style={({ pressed }) => [
+                            styles.secondaryButton,
+                            pressed ? styles.pressed : null,
+                        ]}
+                    >
+                        <Text style={styles.secondaryButtonText}>Kaynaklara Dön</Text>
                     </Pressable>
                 </View>
             </View>
@@ -343,23 +391,45 @@ export default function QuizBySourceScreen() {
                     </Text>
                 ) : (
                     topics.map((topic, index) => {
-                        const counts = countsByTopicId[topic.id];
-                        const questionCount = counts?.questionCount ?? 0;
-                        const solvedCount = counts?.solvedCount ?? 0;
+                        const counts = countsByTopicId[topic.id] ?? EMPTY_COUNTS;
+                        const { questionCount, solvedCount, aiQuestionCount } = counts;
+                        const remaining = Math.max(0, questionCount - solvedCount);
                         const isDeleting = deletingTopicId === topic.id;
                         // Kaynaktan cikarilan konular silinmez; yalnizca "Yeni
                         // Konu" akisindan elle eklenenler kaldirilabilir.
                         const canDelete = topic.origin === 'manual';
+                        const isAiOnly = remaining === 0;
 
                         return (
                             <AnimatedCard
                                 key={topic.id}
+                                // Silme butonu artik kartin ICINDE degil,
+                                // yanindaki ayri bir dokunma alani. Iki
+                                // ic ice Pressable'da 2px iskalayan dokunus
+                                // silmek yerine test baslatiyordu.
+                                style={styles.topicRow}
                                 delayMs={Math.min(200, index * 35)}
                                 resetKey={topic.id}
                             >
                                 <Pressable
-                                    onPress={() => handleStartTopic(topic.id)}
+                                    onPress={() =>
+                                        isAiOnly
+                                            ? confirmAiOnlyStart(
+                                                  topic.id,
+                                                  topic.name,
+                                                  questionCount > 0
+                                              )
+                                            : handleStartTopic(topic.id)
+                                    }
                                     disabled={isDeleting}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`${topic.name} konusunda teste başla`}
+                                    accessibilityHint={
+                                        isAiOnly
+                                            ? 'Bu konuda çözülmemiş kaynak sorusu yok, sorular AI ile üretilir'
+                                            : `${remaining} çözülmemiş soru var`
+                                    }
+                                    accessibilityState={{ disabled: isDeleting }}
                                     style={({ pressed }) => [
                                         styles.topicCard,
                                         pressed ? styles.topicCardPressed : null,
@@ -371,9 +441,28 @@ export default function QuizBySourceScreen() {
                                             {topic.name}
                                         </Text>
                                         <Text style={styles.topicMeta}>
-                                            {questionCount} soru • {solvedCount} çözüldü
+                                            {counts.sourceQuestionCount} soru
+                                            {aiQuestionCount > 0
+                                                ? ` (+${aiQuestionCount} AI)`
+                                                : ''}{' '}
+                                            • {solvedCount} çözüldü
                                             {canDelete ? ' • elle eklendi' : ''}
                                         </Text>
+
+                                        {isAiOnly ? (
+                                            <View style={styles.topicBadge}>
+                                                <Ionicons
+                                                    name="sparkles"
+                                                    size={10}
+                                                    color={palette.accent}
+                                                />
+                                                <Text style={styles.topicBadgeText}>
+                                                    {questionCount > 0
+                                                        ? 'Bitti — AI üretecek'
+                                                        : 'Hazır soru yok — AI üretecek'}
+                                                </Text>
+                                            </View>
+                                        ) : null}
                                     </View>
 
                                     <ProgressRing
@@ -386,34 +475,39 @@ export default function QuizBySourceScreen() {
                                         }
                                         size={40}
                                     />
-
-                                    {canDelete ? (
-                                        <Pressable
-                                            onPress={() =>
-                                                handleDeleteTopic(topic.id, topic.name)
-                                            }
-                                            disabled={isDeleting}
-                                            style={({ pressed }) => [
-                                                styles.deleteButton,
-                                                pressed ? styles.deleteButtonPressed : null,
-                                            ]}
-                                            hitSlop={8}
-                                        >
-                                            {isDeleting ? (
-                                                <ActivityIndicator
-                                                    size="small"
-                                                    color={palette.danger}
-                                                />
-                                            ) : (
-                                                <Ionicons
-                                                    name="trash-outline"
-                                                    size={16}
-                                                    color={palette.textMuted}
-                                                />
-                                            )}
-                                        </Pressable>
-                                    ) : null}
                                 </Pressable>
+
+                                {canDelete ? (
+                                    <Pressable
+                                        onPress={() =>
+                                            handleDeleteTopic(topic.id, topic.name)
+                                        }
+                                        disabled={isDeleting}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`${topic.name} konusunu sil`}
+                                        accessibilityState={{
+                                            disabled: isDeleting,
+                                            busy: isDeleting,
+                                        }}
+                                        style={({ pressed }) => [
+                                            styles.deleteButton,
+                                            pressed ? styles.deleteButtonPressed : null,
+                                        ]}
+                                    >
+                                        {isDeleting ? (
+                                            <ActivityIndicator
+                                                size="small"
+                                                color={palette.danger}
+                                            />
+                                        ) : (
+                                            <Ionicons
+                                                name="trash-outline"
+                                                size={18}
+                                                color={palette.textMuted}
+                                            />
+                                        )}
+                                    </Pressable>
+                                ) : null}
                             </AnimatedCard>
                         );
                     })
@@ -429,26 +523,30 @@ export default function QuizBySourceScreen() {
                         onChangeText={setNewTopicName}
                         placeholder="Örn: Phrasal Verbs"
                         placeholderTextColor={palette.textMuted}
+                        accessibilityLabel="Yeni konu adı"
                         style={styles.input}
                     />
 
+                    {/* Buton eskiden bos alanda "pasif gorunup" yine de
+                        calisiyordu; bu celiskili sinyaldi. Artik normal
+                        gorunuyor ve ne yapilmasi gerektigini altindaki
+                        aciklama soyluyor. */}
                     <Pressable
                         onPress={handleOpenFlowForNewTopic}
+                        accessibilityRole="button"
+                        accessibilityLabel="Bu konuda AI ile soru üret"
                         style={({ pressed }) => [
                             styles.primaryButton,
                             pressed ? styles.pressed : null,
-                            !trimmedNewTopicName ? styles.disabled : null,
                         ]}
                     >
                         <Ionicons name="sparkles" size={15} color={palette.onDarkPrimary} />
                         <Text style={styles.primaryButtonText}>Bu Konuda Soru Üret</Text>
                     </Pressable>
 
-                    {/* Konu adi bosken buton pasif gorunur; yine de basilabilir
-                        ve ne yapmasi gerektigini soyleyen yumusak uyari cikar. */}
                     {!trimmedNewTopicName && !flowNotice ? (
                         <Text style={styles.hintText}>
-                            Konu, akış sayfası açılırken oluşturulur.
+                            Konu adını yaz; sorular AI tarafından üretilecek.
                         </Text>
                     ) : null}
 
@@ -499,7 +597,13 @@ const styles = StyleSheet.create({
         marginTop: spacing.md,
         marginBottom: spacing.xs,
     },
+    topicRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+    },
     topicCard: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         gap: spacing.md,
@@ -514,6 +618,7 @@ const styles = StyleSheet.create({
     },
     topicText: {
         flex: 1,
+        gap: 3,
     },
     topicName: {
         fontSize: 15,
@@ -523,11 +628,26 @@ const styles = StyleSheet.create({
     topicMeta: {
         ...uiType.small,
         color: palette.textMuted,
-        marginTop: 3,
+    },
+    topicBadge: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        marginTop: 2,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: radius.pill,
+        backgroundColor: palette.primarySurface,
+    },
+    topicBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: palette.accent,
     },
     deleteButton: {
-        width: 34,
-        height: 34,
+        width: 46,
+        height: 46,
         borderRadius: radius.md,
         alignItems: 'center',
         justifyContent: 'center',
@@ -565,6 +685,21 @@ const styles = StyleSheet.create({
     primaryButtonText: {
         color: palette.onDarkPrimary,
         fontSize: 15,
+        fontWeight: '700',
+    },
+    secondaryButton: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: spacing.sm,
+        paddingVertical: 13,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: palette.primaryBorder,
+        backgroundColor: palette.cardBg,
+    },
+    secondaryButtonText: {
+        color: palette.accent,
+        fontSize: 14,
         fontWeight: '700',
     },
     hintText: {

@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std/http/server.ts';
+import { handlePreflight, jsonHeaders } from '../_shared/cors.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 const GEMINI_MODEL =
@@ -86,13 +87,18 @@ function normalizeTopics(rawTopics: unknown, maxTopics: number): string[] {
 }
 
 serve(async (req) => {
+    const preflight = handlePreflight(req);
+    if (preflight) {
+        return preflight;
+    }
+
     try {
         const { contentText, maxTopics = 8 } = await req.json();
 
         if (!contentText || typeof contentText !== 'string') {
             return new Response(JSON.stringify({ error: 'contentText zorunludur.' }), {
                 status: 400,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -123,7 +129,7 @@ serve(async (req) => {
         if ('error' in geminiResult) {
             return new Response(JSON.stringify({ error: geminiResult.error }), {
                 status: 503,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -132,7 +138,7 @@ serve(async (req) => {
 
         if (!rawText || typeof rawText !== 'string') {
             return new Response(JSON.stringify({ topics: [] }), {
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -151,14 +157,14 @@ serve(async (req) => {
         }
 
         return new Response(JSON.stringify({ topics: parsedTopics }), {
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders,
         });
     } catch (error) {
         return new Response(
             JSON.stringify({ error: error instanceof Error ? error.message : 'Bilinmeyen hata' }),
             {
                 status: 500,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             }
         );
     }

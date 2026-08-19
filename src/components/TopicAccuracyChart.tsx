@@ -2,6 +2,12 @@ import { StyleSheet, Text, View } from 'react-native';
 import { palette, radius, spacing, uiType } from '../theme/tokens';
 
 interface TopicAccuracyItem {
+    /**
+     * React anahtari olarak kullaniliyor. Konu ADI kullanilamaz: liste tum
+     * kaynaklardaki konulari topluyor ve "Genel Soru Bankasi" gibi adlar
+     * birden fazla kaynakta ayni olabiliyor.
+     */
+    topicId: string;
     topicName: string;
     accuracy: number;
 }
@@ -33,7 +39,12 @@ export function TopicAccuracyChart({ items, maxRows = 5 }: TopicAccuracyChartPro
                     const ratio = Math.max(0, Math.min(1, item.accuracy / 100));
 
                     return (
-                        <View key={item.topicName} style={styles.row}>
+                        <View
+                            key={item.topicId}
+                            style={styles.row}
+                            accessible
+                            accessibilityLabel={`${item.topicName}: yüzde ${Math.round(item.accuracy)} başarı`}
+                        >
                             <Text style={styles.name} numberOfLines={1}>
                                 {item.topicName}
                             </Text>

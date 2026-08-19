@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../services/supabase';
+import { localizeError } from '../utils/errors';
 
 /**
  * Tasarimdaki "Son Aktiviteler" karti tek tek cevaplari degil, bir oturumun
@@ -99,7 +100,7 @@ export function useDashboardStats() {
         } = await supabase.auth.getUser();
 
         if (userError || !user) {
-            setError(userError?.message ?? 'Kullanici oturumu bulunamadi.');
+            setError(localizeError(userError, 'Oturum bulunamadı.'));
             setStats(EMPTY_STATS);
             setIsLoading(false);
             return;
@@ -121,13 +122,13 @@ export function useDashboardStats() {
         ]);
 
         if (sourceError) {
-            setError(sourceError.message);
+            setError(localizeError(sourceError, 'Kaynak sayısı okunamadı.'));
             setIsLoading(false);
             return;
         }
 
         if (logError) {
-            setError(logError.message);
+            setError(localizeError(logError, 'Çözüm geçmişin okunamadı.'));
             setIsLoading(false);
             return;
         }

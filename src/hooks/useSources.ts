@@ -6,9 +6,26 @@ import {
     type ExtractedQuestionItem,
 } from '../services/geminiService';
 import type { Database } from '../types/database.types';
+import { localizeError } from '../utils/errors';
 
 type Source = Database['public']['Tables']['sources']['Row'];
 export type IngestMode = 'hybrid' | 'questions-only' | 'topics-only';
+
+/**
+ * Yukleme akisinin hangi adiminda oldugumuz. Ekran bunu ilerleme cubugu ve
+ * "3/8 parca" gibi bir etiket icin kullaniyor: islem dakikalarca surebiliyor
+ * ve tek bir "Isleniyor..." yazisi kullaniciya donmus hissi veriyordu.
+ */
+export interface IngestProgress {
+    /** Kullaniciya gosterilecek Turkce adim adi. */
+    label: string;
+    /** Tamamlanan is birimi. */
+    completed: number;
+    /** Toplam is birimi; bilinmiyorsa 0. */
+    total: number;
+}
+
+type IngestProgressHandler = (progress: IngestProgress) => void;
 
 interface CreateSourceInput {
     title: string;
@@ -16,6 +33,7 @@ interface CreateSourceInput {
     sourceType?: string;
     topicNames?: string[];
     ingestMode?: IngestMode;
+    onProgress?: IngestProgressHandler;
 }
 
 interface CreateSourceResult {
@@ -269,7 +287,7 @@ export function useSources() {
             .order('created_at', { ascending: false });
 
         if (queryError) {
-            setError(queryError.message);
+            setError(localizeError(queryError, 'Kaynakların yüklenemedi.'));
             setIsLoading(false);
             return;
         }
@@ -289,8 +307,13 @@ export function useSources() {
             sourceType,
             topicNames,
             ingestMode = 'hybrid',
+            onProgress,
         }: CreateSourceInput): Promise<CreateSourceResult> => {
             setError(null);
+
+            const report: IngestProgressHandler = (progress) => onProgress?.(progress);
+
+            report({ label: 'Kaynak kaydediliyor...', completed: 0, total: 0 });
 
             const {
                 data: { user },
@@ -298,7 +321,7 @@ export function useSources() {
             } = await supabase.auth.getUser();
 
             if (userError || !user) {
-                throw new Error(userError?.message ?? 'Kullanici oturumu bulunamadi.');
+                throw new Error(localizeError(userError, 'Oturum bulunamadı.'));
             }
 
             const { data: insertedSource, error: insertError } = await supabase
@@ -313,7 +336,7 @@ export function useSources() {
                 .single();
 
             if (insertError || !insertedSource) {
-                throw new Error(insertError?.message ?? 'Kaynak kaydedilemedi.');
+                throw new Error(localizeError(insertError, 'Kaynak kaydedilemedi.'));
             }
 
             const topicMap = new Map<string, string>();
@@ -337,6 +360,7 @@ export function useSources() {
             // "Genel Soru Bankasi" kovasina dusmek soru sayisini de kisitliyor.
             let resolvedTopics = normalizedTopics;
             if (resolvedTopics.length === 0) {
+                report({ label: 'Konu başlıkları çıkarılıyor...', completed: 0, total: 0 });
                 try {
                     const aiTopics = await extractTopicsFromSource({
                         contentText: buildTopicSamplingExcerpt(contentText),
@@ -351,10 +375,7 @@ export function useSources() {
                         ).values()
                     );
                 } catch (topicError) {
-                    warning =
-                        topicError instanceof Error
-                            ? `Konu cikarimi basarisiz: ${topicError.message}`
-                            : 'Konu cikarimi basarisiz oldu.';
+                    warning = `Konu çıkarımı başarısız oldu: ${localizeError(topicError)}`;
                 }
             }
 
@@ -382,7 +403,7 @@ export function useSources() {
 
                 if (topicInsertError || !insertedTopics) {
                     throw new Error(
-                        `Kaynak kaydedildi ama konular eklenemedi: ${topicInsertError?.message ?? 'Bilinmeyen hata'}`
+                        `Kaynak kaydedildi ama konular eklenemedi: ${localizeError(topicInsertError)}`
                     );
                 }
 
@@ -402,10 +423,16 @@ export function useSources() {
                         let chunkFailureCount = 0;
                         let emptyChunkCount = 0;
 
+                        report({
+                            label: `Sorular çıkarılıyor (0/${chunks.length} parça)`,
+                            completed: 0,
+                            total: chunks.length,
+                        });
+
                         // Butun parcalar okunuyor. Onceden toplam hedefe ulasinca
                         // donguden cikiliyordu; olcumde ilk parca tek basina hedefi
                         // doldurdugu icin kaynagin %84'u hic okunmuyordu.
-                        for (const chunk of chunks) {
+                        for (const [chunkIndex, chunk] of chunks.entries()) {
                             // Bütce parca basina hesaplaniyor. Once toplam hedef tum
                             // konulara bolunuyordu (80/8 = 10); her parca yalnizca
                             // 1-2 konu icerdiginden bu, icinde 19 soru olan parcayi
@@ -439,30 +466,32 @@ export function useSources() {
                                 }
                             }
 
-                            if (chunkFailed) {
-                                chunkFailureCount += 1;
-                                continue;
-                            }
+                            if (!chunkFailed && chunkQuestions.length > 0) {
+                                for (const item of chunkQuestions) {
+                                    const key = normalizeQuestionText(item.questionText);
+                                    if (!key || seenQuestionKeys.has(key)) {
+                                        continue;
+                                    }
 
-                            if (chunkQuestions.length === 0) {
-                                emptyChunkCount += 1;
-                                continue;
-                            }
-
-                            for (const item of chunkQuestions) {
-                                const key = normalizeQuestionText(item.questionText);
-                                if (!key || seenQuestionKeys.has(key)) {
-                                    continue;
+                                    seenQuestionKeys.add(key);
+                                    extractedQuestions.push(item);
                                 }
-
-                                seenQuestionKeys.add(key);
-                                extractedQuestions.push(item);
+                            } else if (chunkFailed) {
+                                chunkFailureCount += 1;
+                            } else {
+                                emptyChunkCount += 1;
                             }
+
+                            report({
+                                label: `Sorular çıkarılıyor (${chunkIndex + 1}/${chunks.length} parça, ${extractedQuestions.length} soru)`,
+                                completed: chunkIndex + 1,
+                                total: chunks.length,
+                            });
                         }
 
                         const unreadableChunkCount = chunkFailureCount + emptyChunkCount;
                         if (unreadableChunkCount > 0) {
-                            warning = `Kaynagin ${unreadableChunkCount}/${chunks.length} parcasindan soru alinamadi; soru sayisi eksik olabilir.`;
+                            warning = `Kaynağın ${unreadableChunkCount}/${chunks.length} parçasından soru alınamadı; soru sayısı eksik olabilir.`;
                         }
 
                         if (extractedQuestions.length > 0) {
@@ -575,12 +604,18 @@ export function useSources() {
                             }
 
                             if (rowsToInsert.length > 0) {
+                                report({
+                                    label: `${rowsToInsert.length} soru kaydediliyor...`,
+                                    completed: chunks.length,
+                                    total: chunks.length,
+                                });
+
                                 const { error: questionInsertError } = await supabase
                                     .from('questions')
                                     .insert(rowsToInsert);
 
                                 if (questionInsertError) {
-                                    warning = `Sorular veritabanina yazilamadi: ${questionInsertError.message}`;
+                                    warning = `Sorular veritabanına yazılamadı: ${localizeError(questionInsertError)}`;
                                 } else {
                                     insertedQuestionCount = rowsToInsert.length;
 
@@ -601,24 +636,41 @@ export function useSources() {
                                             questionCount,
                                         }))
                                         .sort((a, b) => b.questionCount - a.questionCount);
+
+                                    // Soru dusmeyen konular silinir. Konu cikarimi
+                                    // 16 basliga kadar aciyor ama sorular yalnizca
+                                    // bir kismiyla eslesiyor; geri kalanlar konu
+                                    // listesinde "0 soru" yazan, dokununca sessizce
+                                    // AI testi baslatan tuzak kartlar oluyordu.
+                                    const emptyTopicIds = insertedTopics
+                                        .map((topic) => topic.id)
+                                        .filter((topicId) => !questionCountByTopicId.has(topicId));
+
+                                    if (emptyTopicIds.length > 0) {
+                                        const { error: cleanupError } = await supabase
+                                            .from('topics')
+                                            .delete()
+                                            .in('id', emptyTopicIds);
+
+                                        if (!cleanupError) {
+                                            insertedTopicCount -= emptyTopicIds.length;
+                                        }
+                                    }
                                 }
                             } else if (skippedUngroundedQuestionCount > 0) {
                                 // Model soru dondurdu ama hicbiri kaynakta yoktu.
                                 warning =
-                                    `Uretilen ${skippedUngroundedQuestionCount} sorunun hicbiri kaynak metinde bulunamadi, ` +
-                                    'hepsi elendi. Kaynak metin soru icermiyor olabilir.';
+                                    `Üretilen ${skippedUngroundedQuestionCount} sorunun hiçbiri kaynak metinde bulunamadı, ` +
+                                    'hepsi elendi. Kaynak metin soru içermiyor olabilir.';
                             }
                         } else {
                             warning =
-                                'Soru uretimi bos dondu. Kaynak metni soru cikarmak icin yetersiz olabilir.';
+                                'Kaynaktan soru çıkarılamadı. Metin soru içermiyor ya da okunabilir durumda olmayabilir.';
                         }
                     } catch (questionError) {
                         // Soru uretimi patlasa da kaynak kaydi ayakta kalir, ama
                         // sebebi yutulmaz: kullanici neden 0 soru geldigini gormeli.
-                        warning =
-                            questionError instanceof Error
-                                ? `Soru uretimi basarisiz: ${questionError.message}`
-                                : 'Soru uretimi basarisiz oldu.';
+                        warning = `Soru çıkarımı başarısız oldu: ${localizeError(questionError)}`;
                     }
                 }
             }
@@ -644,75 +696,20 @@ export function useSources() {
         async (sourceId: string): Promise<void> => {
             setError(null);
 
-            const { data: topicRows, error: topicsError } = await supabase
-                .from('topics')
-                .select('id')
-                .eq('source_id', sourceId);
-
-            if (topicsError) {
-                throw new Error(topicsError.message);
-            }
-
-            const topicIds = (topicRows ?? []).map((topic) => topic.id);
-
-            if (topicIds.length > 0) {
-                const { data: questionRows, error: questionsQueryError } = await supabase
-                    .from('questions')
-                    .select('id')
-                    .in('topic_id', topicIds);
-
-                if (questionsQueryError) {
-                    throw new Error(questionsQueryError.message);
-                }
-
-                const questionIds = (questionRows ?? []).map((question) => question.id);
-
-                if (questionIds.length > 0) {
-                    const { error: logDeleteError } = await supabase
-                        .from('question_logs')
-                        .delete()
-                        .in('question_id', questionIds);
-
-                    if (logDeleteError) {
-                        throw new Error(logDeleteError.message);
-                    }
-
-                    const { error: questionDeleteError } = await supabase
-                        .from('questions')
-                        .delete()
-                        .in('id', questionIds);
-
-                    if (questionDeleteError) {
-                        throw new Error(questionDeleteError.message);
-                    }
-                }
-
-                const { error: progressDeleteError } = await supabase
-                    .from('user_progress')
-                    .delete()
-                    .in('topic_id', topicIds);
-
-                if (progressDeleteError) {
-                    throw new Error(progressDeleteError.message);
-                }
-
-                const { error: topicDeleteError } = await supabase
-                    .from('topics')
-                    .delete()
-                    .in('id', topicIds);
-
-                if (topicDeleteError) {
-                    throw new Error(topicDeleteError.message);
-                }
-            }
-
+            // Tek satir yetiyor: 0005'teki ON DELETE CASCADE zinciri kaynagi
+            // silince konulari, sorulari, loglari ve ilerleme kayitlarini
+            // birlikte temizliyor. Onceden bunlar tek tek siliniyordu ama
+            // question_logs ve user_progress uzerinde DELETE politikasi
+            // olmadigi icin o cagrilar RLS altinda sessizce 0 satir etkiliyor,
+            // hata da donmuyordu; yani kod "sildim" saniyordu. Politikalar
+            // 0007'de eklendi, tek tek silme ihtiyaci ise ortadan kalkti.
             const { error: sourceDeleteError } = await supabase
                 .from('sources')
                 .delete()
                 .eq('id', sourceId);
 
             if (sourceDeleteError) {
-                throw new Error(sourceDeleteError.message);
+                throw new Error(localizeError(sourceDeleteError, 'Kaynak silinemedi.'));
             }
 
             await fetchSources();

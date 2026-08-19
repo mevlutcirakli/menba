@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { calculateTopicWeights } from '../services/adaptiveEngine';
 import { supabase } from '../services/supabase';
-import type { Database } from '../types/database.types';
+import { localizeError } from '../utils/errors';
 
-interface TopicProgressItem {
+export interface TopicProgressItem {
     topicId: string;
     topicName: string;
     totalAttempts: number;
@@ -33,7 +33,7 @@ export function useProgress() {
         } = await supabase.auth.getUser();
 
         if (userError || !user) {
-            setError(userError?.message ?? 'Kullanici oturumu bulunamadi.');
+            setError(localizeError(userError, 'Oturum bulunamadı.'));
             setIsLoading(false);
             setIsRefreshing(false);
             return;
@@ -45,7 +45,7 @@ export function useProgress() {
             .eq('user_id', user.id);
 
         if (sourceError) {
-            setError(sourceError.message);
+            setError(localizeError(sourceError, 'Kaynakların okunamadı.'));
             setIsLoading(false);
             setIsRefreshing(false);
             return;
@@ -67,14 +67,14 @@ export function useProgress() {
             ]);
 
         if (topicError) {
-            setError(topicError.message);
+            setError(localizeError(topicError, 'Konular yüklenemedi.'));
             setIsLoading(false);
             setIsRefreshing(false);
             return;
         }
 
         if (progressError) {
-            setError(progressError.message);
+            setError(localizeError(progressError, 'İlerlemen yüklenemedi.'));
             setIsLoading(false);
             setIsRefreshing(false);
             return;
@@ -170,7 +170,18 @@ export function useProgress() {
     }, [refresh]);
 
     const belowTargetTopics = useMemo(
-        () => progressByTopic.filter((item) => item.accuracy < 80),
+        () => progressByTopic.filter((item) => item.totalAttempts > 0 && item.accuracy < 80),
+        [progressByTopic]
+    );
+
+    /**
+     * Basari grafigi yalnizca gercekten calisilmis konulari gosterir.
+     * `progressByTopic` basariya gore artan sirali oldugu ve hic denenmemis
+     * konularin accuracy'si 0 oldugu icin, filtresiz halinde grafigin ilk bes
+     * satiri her zaman "%0" olan, aslinda hic acilmamis konulardi.
+     */
+    const studiedTopics = useMemo(
+        () => progressByTopic.filter((item) => item.totalAttempts > 0),
         [progressByTopic]
     );
 
@@ -195,6 +206,7 @@ export function useProgress() {
         () => ({
             progressByTopic,
             belowTargetTopics,
+            studiedTopics,
             todayPriorityTopics,
             isLoading,
             isRefreshing,
@@ -205,6 +217,7 @@ export function useProgress() {
         [
             progressByTopic,
             belowTargetTopics,
+            studiedTopics,
             todayPriorityTopics,
             isLoading,
             isRefreshing,

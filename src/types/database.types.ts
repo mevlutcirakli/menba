@@ -13,6 +13,13 @@ export type Json =
  */
 export type TopicOrigin = 'ingest' | 'manual';
 
+/**
+ * Sorunun kaynagi. 'ingest' = kaynak metninden cikarildi, 'ai' = konudaki
+ * hazir sorular bitince uretildi (bkz. migration 0007). Konu/kaynak
+ * sayaclarinda ikisi ayri gosteriliyor.
+ */
+export type QuestionOrigin = 'ingest' | 'ai';
+
 export interface Database {
     public: {
         Tables: {
@@ -45,6 +52,7 @@ export interface Database {
                     correct_answer: string;
                     explanation: string | null;
                     difficulty: number | null;
+                    origin: QuestionOrigin;
                     created_at: string | null;
                 };
                 Insert: {
@@ -55,6 +63,7 @@ export interface Database {
                     correct_answer: string;
                     explanation?: string | null;
                     difficulty?: number;
+                    origin?: QuestionOrigin;
                     created_at?: string;
                 };
                 Update: Partial<Database['public']['Tables']['questions']['Insert']>;

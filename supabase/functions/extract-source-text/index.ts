@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std/http/server.ts';
+import { handlePreflight, jsonHeaders } from '../_shared/cors.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 const GEMINI_MODEL =
@@ -56,20 +57,25 @@ async function callGeminiWithRetry(payload: unknown): Promise<{ response: Respon
 }
 
 serve(async (req) => {
+    const preflight = handlePreflight(req);
+    if (preflight) {
+        return preflight;
+    }
+
     try {
         const { base64Data, mimeType, fileName } = await req.json();
 
         if (!base64Data || typeof base64Data !== 'string') {
             return new Response(JSON.stringify({ error: 'base64Data zorunludur.' }), {
                 status: 400,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
         if (!mimeType || typeof mimeType !== 'string') {
             return new Response(JSON.stringify({ error: 'mimeType zorunludur.' }), {
                 status: 400,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -78,7 +84,7 @@ serve(async (req) => {
                 JSON.stringify({ error: 'Dosya cok buyuk. Daha kucuk bir dosya deneyin.' }),
                 {
                     status: 413,
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: jsonHeaders,
                 }
             );
         }
@@ -107,7 +113,7 @@ serve(async (req) => {
         if ('error' in geminiResult) {
             return new Response(JSON.stringify({ error: geminiResult.error }), {
                 status: 503,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             });
         }
 
@@ -135,20 +141,20 @@ serve(async (req) => {
                 }),
                 {
                     status: 422,
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: jsonHeaders,
                 }
             );
         }
 
         return new Response(JSON.stringify({ text }), {
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonHeaders,
         });
     } catch (error) {
         return new Response(
             JSON.stringify({ error: error instanceof Error ? error.message : 'Bilinmeyen hata' }),
             {
                 status: 500,
-                headers: { 'Content-Type': 'application/json' },
+                headers: jsonHeaders,
             }
         );
     }
